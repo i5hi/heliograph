@@ -11,7 +11,12 @@ The renderer is built on **visualSynthesizerOrigins**, the visualSynth matrix/gr
 > This file is a technical overview. For dependency install, per-platform build steps, audio-routing
 > setup, controls, and release packaging, see **[`app/README.md`](app/README.md)**.
 
-![heliograph — radial visualizer with the broadcast HUD and control panels open](assets/panels.png)
+![heliograph — the radial visualizer with the broadcast HUD](assets/radial.png)
+
+> **This is exactly how a recording looks.** The control panels are hidden here — toggle them with
+> **`G`**. They're drawn to the screen only and are **never captured** in the video (see
+> [Render pipeline](#render-pipeline)), so you can leave them off for a clean frame or open them
+> mid-recording without anything showing up in the MP4.
 
 ---
 
@@ -88,6 +93,8 @@ preserve 16:9 at any window/fullscreen size. The control panels, parameter-help 
 overlay, and REC indicator are drawn to the screen **after** `fboFinal` is finalised — mapped into FBO
 space but never composited into the recorded frame.
 
+![Control panels open (toggle with `G`) — visible live, but never part of the recorded frame](assets/panels.png)
+
 ### Modulation
 Two modulation banks, **AUDIO MOD** and **LFO MOD**, each with up to 3 slots (`ModSlot`). A slot binds
 a destination parameter and rides its value from a base toward a target, driven either by audio
@@ -158,12 +165,13 @@ heliograph/
 │   │   ├── main.cpp        # window + GL setup, .app data-root handling, run loop
 │   │   ├── ofApp.h         # app class, structs, the live-defaults "TWEAK ZONE"
 │   │   └── ofApp.cpp       # audio, DSP, visualizer, render, modulation, HUD, recording
+│   ├── bin/data/           # bundled assets: fonts, factory presets, factory session.json (seeds ~/.heliograph/)
 │   ├── addons.make         # empty — core openFrameworks only
 │   ├── config.make         # openFrameworks build config
 │   ├── Makefile            # oF make wrapper (Linux/Windows)
 │   └── README.md           # install / build / run / controls guide
+├── assets/                 # screenshots used in this README
 ├── .github/workflows/      # release.yml — builds + attaches prebuilt binaries on GitHub Release
-├── session.json            # sample session metadata (real one lives in ~/.heliograph/)
 └── LICENSE                 # MIT
 ```
 

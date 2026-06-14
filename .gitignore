@@ -17,7 +17,8 @@ gs_ffmpeg.log
 heliograph_frame.png
 
 # ---- local/dev only ----
-/session.json            # a stray session at the repo root (the real one lives in ~/.heliograph/)
+# a stray session at the repo root (the real one lives in ~/.heliograph/)
+/session.json
 app/src/.bak_*/          # local source backups
 app/_pristine_backup/    # dev reference copies
 app/_scaffold_ref/       # dev reference copies
