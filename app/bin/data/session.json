@@ -1,0 +1,23 @@
+{
+  "_help": {
+    "note": "Default session settings. On first launch this is copied to ~/.heliograph/session.json. Edit live in-app with 'E'; SAVE writes your copy there. This file is the factory default and ships with the app.",
+    "recDir": "folder for recordings — \"\" means the OS videos folder (macOS ~/Movies, Linux ~/Videos, Windows %USERPROFILE%\\Videos). Recordings always go into a HelioRecordings/ subfolder. Set it via E -> Recordings.",
+    "coordinates": "auto-generated each launch (waypoint + heading); distance counts recorded seconds"
+  },
+  "channel": "TRANSMISSION",
+  "transmission": 1,
+  "artifact": "HelioGraph",
+  "shorthand": "TxN",
+  "artist": "",
+  "title": "UNTITLED",
+  "note": "",
+  "movement": 0,
+  "movementText": "",
+  "recDir": "",
+  "date": "today",
+  "coordinates": {
+    "waypoint": "00·00·000",
+    "heading": 0.0,
+    "distance": 0.0
+  }
+}

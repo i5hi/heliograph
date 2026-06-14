@@ -1,0 +1,60 @@
+# heliograph — repo root (.gitignore)
+#
+# Tracked on purpose: app/src/, app/bin/data/ (fonts + factory presets + default session.json),
+# the build project files, README, LICENSE. User data lives in ~/.heliograph/ and is never in the repo.
+
+# ---- OS cruft ----
+.DS_Store
+.AppleDouble
+Thumbs.db
+desktop.ini
+
+# ---- recordings & scratch (never checked in) ----
+/recordings/
+*.mp4
+*.wav
+gs_ffmpeg.log
+heliograph_frame.png
+
+# ---- local/dev only ----
+/session.json            # a stray session at the repo root (the real one lives in ~/.heliograph/)
+app/src/.bak_*/          # local source backups
+app/_pristine_backup/    # dev reference copies
+app/_scaffold_ref/       # dev reference copies
+CHANGES_*.md             # local working notes
+
+# ---- macOS / Xcode build output ----
+app/build/
+app/bin/heliograph.app/
+DerivedData/
+**/xcuserdata/
+**/*.xcuserstate
+*.xcscmblueprint
+
+# ---- Linux (openFrameworks Makefile) build output ----
+app/obj/
+app/bin/heliograph        # compiled Linux binary
+**/*.o
+*.d
+
+# ---- Windows (Visual Studio) build output ----
+app/bin/*.exe
+app/bin/*.dll
+app/bin/*.ilk
+app/bin/*.pdb
+**/*.obj
+**/*.vcxproj.user
+.vs/
+[Dd]ebug/
+[Rr]elease/
+x64/
+ipch/
+
+# ---- editors ----
+.idea/
+.vscode/
+*.swp
+*~
+
+# NOTE: app/bin/data/ IS tracked — it ships fonts, the factory presets, and the default
+# session.json inside the binary. Do not ignore it.

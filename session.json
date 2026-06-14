@@ -1,0 +1,22 @@
+{
+  "_help": {
+    "artist": "your handle, shown in the broadcast frame",
+    "coordinates": "starting values; heading/distance drift forward as the track plays",
+    "date": "ISO date YYYY-MM-DD, or \"today\" to auto-fill on launch"
+  },
+  "artifact": "HelioGraph",
+  "artist": "Freeform Syndicate",
+  "channel": "YggdraSounds",
+  "coordinates": {
+    "distance": 0.0,
+    "heading": 172.4425048828125,
+    "waypoint": "03·65·032"
+  },
+  "date": "2026.05.29",
+  "movement": 1,
+  "movementText": "",
+  "note": "",
+  "shorthand": "Archive",
+  "title": "someweird norweigian name",
+  "transmission": 1
+}
