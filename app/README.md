@@ -61,17 +61,59 @@ First time only, install the oF Linux deps: `<OF>/scripts/linux/<distro>/install
 ## 3. Audio routing (feed system/DAW audio into the app)
 
 The app captures from a **loopback input** — a virtual device that exposes your *output* as an
-*input*. It auto-selects one by name (BlackHole / VB-Cable / VoiceMeeter / PulseAudio monitor /
-JACK / loopback); otherwise it falls back to the first input. The HUD's **SIGNAL** reads
-`NONE` (no audio) · `AUDITION` (audio in) · `LIVE` (audio + recording).
+*input*, so the app "hears" whatever you're playing (Bitwig, a DAW, a browser tab). It auto-selects
+one by name (BlackHole / VB-Cable / VoiceMeeter / PulseAudio monitor / JACK / loopback); otherwise it
+falls back to the first input. The HUD's **SIGNAL** reads `NONE` (no audio) · `AUDITION` (audio in) ·
+`LIVE` (audio + recording).
 
-- **macOS — BlackHole:** `brew install blackhole-2ch`, then in **Audio MIDI Setup** create a
-  **Multi-Output Device** ticking **BlackHole 2ch** *and* your speakers (so you still hear it),
-  and set it as your system/DAW output.
-- **Linux — PulseAudio/PipeWire:** every output has a `.monitor` source — pick it in `pavucontrol`
-  (Recording tab), or the app matches a device containing "monitor". JACK: wire output → capture ports.
-- **Windows — VB-CABLE:** install it (free), set **CABLE Input** as playback, app captures **CABLE Output**;
-  use VoiceMeeter to also monitor.
+The core idea on every platform: **send your audio to the virtual device, and also to your speakers so
+you can still hear it.** Install steps per OS below.
+
+### macOS — BlackHole
+
+1. **Install** (either):
+   - Homebrew: `brew install blackhole-2ch`
+   - or download the installer from <https://existential.audio/blackhole/> and run it.
+   - Reboot or log out/in if `BlackHole 2ch` doesn't appear yet.
+2. **Hear audio AND route it** — create a Multi-Output Device:
+   1. Open **Audio MIDI Setup** (Applications → Utilities).
+   2. Click the **`+`** (bottom-left) → **Create Multi-Output Device**.
+   3. Tick **both** your speakers/headphones **and** **BlackHole 2ch**.
+   4. Set your real output as the **Primary** (top of the list) and enable **Drift Correction** on
+      **BlackHole 2ch**.
+3. **Use it:** set this Multi-Output Device as the output in **System Settings → Sound → Output**
+   (or as your DAW's audio output). Now you hear sound *and* BlackHole receives a copy.
+4. The app auto-selects **BlackHole 2ch** as its input. (To capture silently — no speakers — just set
+   output directly to BlackHole instead of the Multi-Output Device.)
+5. **Launch the built `.app`** (not the raw binary) so macOS grants it its own **Microphone**
+   permission — required for loopback capture. Approve the prompt on first run.
+
+### Windows — VB-CABLE (free)
+
+1. **Install:**
+   1. Download **VB-CABLE** from <https://vb-audio.com/Cable/>.
+   2. Unzip, **right-click `VBCABLE_Setup_x64.exe` → Run as administrator**, click *Install Driver*.
+   3. **Reboot.**
+2. **Route audio to it:** set **CABLE Input** as your playback device in **Settings → System → Sound**
+   (or as your DAW's output). Audio now flows into the cable.
+3. **Still hear it** (CABLE swallows the sound otherwise) — either:
+   - **Sound → Recording → CABLE Output → Properties → Listen → "Listen to this device" → play through
+     your speakers**, or
+   - install **VoiceMeeter** (also VB-Audio) for proper monitoring + a real mixer.
+4. The app captures **CABLE Output** automatically.
+   *(VoiceMeeter route: set output to VoiceMeeter Input; the app matches "voicemeeter".)*
+
+### Linux — PulseAudio / PipeWire (usually no install)
+
+1. **Monitor sources already exist** — every output device has a matching `.monitor` source, so
+   nothing to install in most cases. The app auto-matches a device whose name contains **"monitor"**.
+2. **Pick the monitor** with a mixer GUI:
+   - Install one if needed: `sudo apt install pavucontrol` (Debian/Ubuntu).
+   - Run **`pavucontrol`**, start the app so it shows under the **Recording** tab, and set its source
+     to **"Monitor of \<your output device\>"**.
+   - On PipeWire you can also patch with **Helvum** or `pw-link`.
+3. **JACK:** run the app, then wire your output/system ports to the app's **capture** ports with
+   `qjackctl` (Connections) or Carla. The app matches "jack".
 
 ---
 
@@ -105,6 +147,8 @@ Press **`H`** in-app for the full overlay. Quick reference:
 | `TAB` | toggle layout (radial / grid) — each layout keeps its own independent settings |
 | `X` | reset settings to defaults · `U` HUD on/off |
 | `F` | fullscreen · `S` screenshot · `ESC` close a dialog |
+
+![heliograph control panels — left sliders, right GRAPH/AUDIO/MOD tabs, over the radial visualizer + HUD](../assets/panels.png)
 
 **Right panel tabs:** **GRAPH** (sub-tabs **GLOBAL** = type/mode/fill/falloff + a **Camera-Angle**
 XY pad & Z slider; **PRESETS** = save/load looks) · **AUDIO** (Rate/Spread/Punch) · **MOD**
