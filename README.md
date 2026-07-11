@@ -122,7 +122,7 @@ VideoToolbox (GPU) on macOS, `libx264` (CPU) elsewhere.
 ### Configuration & persistence
 All user data lives in `~/.heliograph/` (portable, not in the repo):
 
-- `session.json` — session metadata (channel, episode, artist, title, note, movement, recordings dir).
+- `session.json` — session metadata (channel, episode, artist, title, note, font, accent, donations, recordings dir).
 - `presets/*.json` — saved visual looks; each preset stores a layout's full appearance + camera angle.
 
 On first launch the app seeds `~/.heliograph/` from the factory `data/` shipped in the build

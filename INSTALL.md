@@ -1,8 +1,8 @@
 # Installing heliograph
 
-**heliograph** is a desktop app for artists: it turns whatever audio you play into a live
-visualizer, **records** it to a clean 1440p MP4, and can **broadcast** it live (audio + a visual
-feed) to a station that listeners tune into from their browser.
+**heliograph** turns whatever audio is playing into a live visualizer, **records** it to a clean
+1440p MP4, and can **broadcast** it live (audio + a visual feed) to a station that listeners tune
+into from their browser.
 
 There's nothing to compile — grab the build for your platform from the
 [**Releases**](../../releases) page and run it.

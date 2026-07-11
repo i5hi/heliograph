@@ -1,4 +1,5 @@
 name: Build release binaries
+# Builds macOS / Linux / Windows binaries. Publish a Release (or use "Run workflow") to trigger.
 
 # Builds heliograph for macOS, Linux and Windows and attaches the artifacts to a GitHub Release.
 # Trigger: create/publish a Release in the GitHub UI (or run manually via "Run workflow").
