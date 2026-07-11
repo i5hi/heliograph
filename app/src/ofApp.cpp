@@ -1934,7 +1934,7 @@ void ofApp::drawSettings() {
     ofSetColor(cNeon); { std::string s = saved ? "SAVED" : "SAVE"; fValue.drawString(s, saveBox.x + saveBox.width * 0.5f - fValue.stringWidth(s) * 0.5f, saveBox.y + 31 * S); }
     if (settingsTab == 0)   // recording filename is a SESSION concern — don't repeat it under every tab
         { ofSetColor(150, 156, 154); fUI.drawString("RECORDING:   " + recBaseName() + ".mp4", px + 40 * S, py + ph - 104 * S); }
-    ofSetColor(120, 126, 124); fUI.drawString("click a field to edit   ·   [tab]/[enter] next   ·   [s]ave / [esc] close", px + 40 * S, py + ph - 40 * S);
+    ofSetColor(120, 126, 124); fUI.drawString("click a field to edit   \xC2\xB7   Cmd+V paste / Cmd+A clear   \xC2\xB7   [tab]/[enter] next   \xC2\xB7   [s]ave / [esc] close", px + 40 * S, py + ph - 40 * S);
 }
 
 //--------------------------------------------------------------
@@ -2402,10 +2402,13 @@ void ofApp::keyPressed(int key) {
             Field& f = fields[editingField];
             bool cmdHeld = ofGetKeyPressed(OF_KEY_LEFT_SUPER) || ofGetKeyPressed(OF_KEY_RIGHT_SUPER) ||
                            ofGetKeyPressed(OF_KEY_LEFT_CONTROL) || ofGetKeyPressed(OF_KEY_RIGHT_CONTROL);
-            if ((cmdHeld && (key == 'v' || key == 'V')) || key == 22) {            // Cmd/Ctrl+V — paste (e.g. invite code)
+            if ((cmdHeld && (key == 'v' || key == 'V')) || key == 22) {            // Cmd/Ctrl+V — paste (e.g. an address)
                 std::string clip = gsClipboard();
                 for (char c : clip) if ((unsigned char)c >= 32 && (unsigned char)c < 127) f.buf += c;   // printable only, single-line
                 commitField(f);
+            }
+            else if (cmdHeld && (key == 'a' || key == 'A' || key == 1 || key == OF_KEY_BACKSPACE)) {    // Cmd/Ctrl+A or Cmd/Ctrl+Backspace — CLEAR the field (then paste to replace)
+                f.buf.clear(); commitField(f);
             }
             else if (key == OF_KEY_BACKSPACE) { if (!f.buf.empty()) f.buf.pop_back(); commitField(f); }
             else if (key == OF_KEY_RETURN || key == OF_KEY_TAB) {                  // commit + jump to next (never land on a section header)

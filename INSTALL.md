@@ -119,6 +119,33 @@ Press **`S`** → **CHANNEL** to set how your channel looks on the listener's pl
 ## Troubleshooting
 
 - **"You need an account on this server to broadcast"** — you haven't registered. Do step 4 first.
-- **No audio / flat SIGNAL meter** — wrong input in `S → ROUTING`, or your OS is routing audio elsewhere.
-  Pick the device carrying your sound and cycle **Channels** until the meter reacts.
 - **macOS won't open the app** — see the quarantine step in §2.
+
+### No signal on the SIGNAL meter (macOS)
+
+Work through these in order:
+
+1. **Grant microphone permission.** heliograph captures audio as an input device, so macOS requires
+   Microphone access — **without it every input reads silence**, virtual devices included.
+   Open **System Settings → Privacy & Security → Microphone** and enable **heliograph**. If it isn't
+   listed, force a fresh prompt in Terminal, then relaunch the app:
+   ```bash
+   tccutil reset Microphone cc.openFrameworks.heliograph
+   ```
+2. **Select the right input.** `S → ROUTING → Input Device` — pick the device carrying your sound, then
+   cycle **Channels** until the meter jumps. If a device you just created/plugged in isn't listed, click
+   **REFRESH DEVICE LIST**.
+
+### Capturing system audio with BlackHole (macOS)
+
+heliograph visualizes an **input** device, so to feed it your computer's own output you route through a
+loopback device like [BlackHole](https://existential.audio/blackhole/) (2ch):
+
+1. Install BlackHole 2ch.
+2. **System Settings → Sound → Output → BlackHole 2ch.** (Now all system audio flows *into* BlackHole —
+   and you won't hear it on your speakers; see step 4 to fix that.)
+3. In heliograph: `S → ROUTING → Input Device → **BlackHole 2ch**`, Channels **1-2**. Play something —
+   the SIGNAL meter should react. (Still nothing? Do the mic-permission step above.)
+4. **To also hear the audio while broadcasting:** open **Audio MIDI Setup**, create a **Multi-Output
+   Device** containing *both* **BlackHole 2ch** and your speakers/headphones, and set **that** as the
+   system Output instead of BlackHole alone. Audio then plays out loud *and* into BlackHole for heliograph.
