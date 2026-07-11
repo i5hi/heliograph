@@ -91,7 +91,7 @@ Broadcasting to a station requires an **account on that station's server**. Acco
 1. **Ask the station admin** for a broadcast registration token. Tell them the **artist name** you want —
    they mint a one-time code tied to it.
 2. In heliograph press **`S`** → **REGISTER** and fill in:
-   - **Registration Server** — where you broadcast: `http://localhost:8090` for a local heliod stack, or the URL of a station you have a token for.
+   - **Registration Server** — where you broadcast. Defaults to the public station `https://radio.stackmate.org`; change it to your own heliod stack once the server is open-sourced.
    - **Invite Code** — the token the admin gave you (you can paste it: click the field, then ⌘V / Ctrl-V).
    - **Artist Name** — your name (this becomes your channel; it locks once registered).
 3. Click **REGISTER**. On success it shows *"Registered as …"* — heliograph now holds your broadcast

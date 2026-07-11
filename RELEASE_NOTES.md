@@ -33,11 +33,18 @@ that listeners tune into from their browser.
 `C` panels · `S` settings · `R` record · `B` broadcast (+record) · `V` level meter · `M` mode ·
 `TAB` layout · `U` HUD · `T` telemetry · `F` fullscreen · `P` screenshot · `H` help · `X` reset
 
+## Broadcast servers
+
+The broadcast server stack (Icecast + snapshot API + gateway) will be **open-sourced soon**, so anyone
+can run their own station and point heliograph at it. For now there is **one live station:
+`radio.stackmate.org`** — it's the default Registration Server. To broadcast there, ask the admin for a
+single-use registration token (see [INSTALL.md](INSTALL.md) §4). You can change the server anytime in
+`S → REGISTER` once you're running your own.
+
 ## Notes
 
-- **Fresh install defaults to a local server** (`http://localhost:8090`) — point the Registration Server
-  at a real station in `S → REGISTER`. No credentials or personal data ship with the app; your settings
-  and recordings live in `~/.heliograph/`.
+- No credentials or personal data ship with the app — only the public station URL as the default server.
+  Your settings and recordings live in `~/.heliograph/`.
 - Built on **openFrameworks 0.12.1**. macOS/Linux/Windows binaries are produced by CI.
 
 ## macOS first-launch

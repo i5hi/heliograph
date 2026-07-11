@@ -1633,7 +1633,7 @@ void ofApp::buildFields() {
     // broadcast config (mount/password/snapshot URL) — the artist never types raw hosts. Click REGISTER
     // (drawn below the fields in drawSettings); then 'B' broadcasts to your own channel.
     curTab = 2;
-    addS("Registration Server", &sRegServer);   // e.g. http://localhost:8090 (local stack) or a station URL
+    addS("Registration Server", &sRegServer);   // defaults to radio.stackmate.org; or your own heliod stack
     addS("Invite Code",         &sInviteCode);  // single-use code from the station admin (consumed on register)
     addS("Artist Name",         &sArtist);      // your channel's display name (same field as CHANNEL → Artist)
 
