@@ -18,9 +18,10 @@ permissions:
 
 env:
   OF_VERSION: "0.12.1"
-  OF_OSX_URL:   "https://openframeworks.cc/versions/v0.12.1/of_v0.12.1_osx_release.zip"
-  OF_LINUX_URL: "https://openframeworks.cc/versions/v0.12.1/of_v0.12.1_linux64gcc6_release.tar.gz"
-  OF_WIN_URL:   "https://openframeworks.cc/versions/v0.12.1/of_v0.12.1_vs_release.zip"
+  # openFrameworks 0.12.1 releases are hosted on GitHub. macOS + Linux are .tar.gz; Windows (VS) is .zip.
+  OF_OSX_URL:   "https://github.com/openframeworks/openFrameworks/releases/download/0.12.1/of_v0.12.1_osx_release.tar.gz"
+  OF_LINUX_URL: "https://github.com/openframeworks/openFrameworks/releases/download/0.12.1/of_v0.12.1_linux64_gcc6_release.tar.gz"
+  OF_WIN_URL:   "https://github.com/openframeworks/openFrameworks/releases/download/0.12.1/of_v0.12.1_vs_64_release.zip"
 
 jobs:
   # ---------------------------------------------------------------- macOS ----
@@ -32,8 +33,8 @@ jobs:
 
       - name: Download openFrameworks
         run: |
-          curl -L -o of.zip "$OF_OSX_URL"
-          mkdir of && unzip -q of.zip -d of
+          curl -L -o of.tgz "$OF_OSX_URL"
+          mkdir of && tar xzf of.tgz -C of
           echo "OF_DIR=$PWD/of/$(ls of)" >> "$GITHUB_ENV"
 
       - name: Place project in OF/apps/myApps/heliograph
