@@ -1819,9 +1819,20 @@ void ofApp::drawSettings() {
         std::string txt = foc ? f.buf
                         : (f.secret ? (f.sp && !f.sp->empty() ? "********" : "(not set)")
                         : (isBech && f.sp && !f.sp->empty() ? gsGroup4(*f.sp) : fieldText(f)));
+        // In-field PASTE / CLEAR buttons on every editable text field (not selectors/folder/locked/gated).
+        f.pasteBox = ofRectangle(); f.clearBox = ofRectangle();          // reset each frame (hidden unless drawn)
+        bool textEditable = f.sp && f.choices.empty() && !f.folder && !inert;
+        float btnReserve = 0;
+        if (textEditable) {
+            float bh = 26 * S, cy = f.box.y + f.box.height * 0.5f, gap = 7 * S;
+            float wc = fUI.stringWidth("CLEAR") + 18 * S, wp = fUI.stringWidth("PASTE") + 18 * S;
+            f.clearBox = ofRectangle(f.box.getMaxX() - 10 * S - wc, cy - bh * 0.5f, wc, bh);
+            f.pasteBox = ofRectangle(f.clearBox.x - gap - wp, cy - bh * 0.5f, wp, bh);
+            btnReserve = f.box.getMaxX() - f.pasteBox.x + 12 * S;
+        }
         // Keep long values (e.g. a Liquid address) INSIDE the box — no overflow past the panel. While
         // editing, scroll to show the TAIL (caret stays visible); at rest, truncate the end with an ellipsis.
-        float maxTxtW = f.box.width - 30 * S;
+        float maxTxtW = f.box.width - 30 * S - btnReserve;
         std::string vis = txt;
         if (foc) { while (vis.size() > 1 && fValue.stringWidth(vis) > maxTxtW) vis = vis.substr(1); }
         else if (fValue.stringWidth(vis) > maxTxtW) {
@@ -1833,10 +1844,21 @@ void ofApp::drawSettings() {
         if (f.locked)  { ofSetColor(120, 126, 124); std::string h = "[locked while registered]"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (gateOff)   { ofSetColor(120, 126, 124); std::string h = "set Wallet Backed Up = YES to enter"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (!f.choices.empty()) { ofSetColor(120, 126, 124); std::string h = "click to toggle"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
-        // Address validity — a small green/red dot at the field's right edge (green = will be broadcast).
+        // PASTE / CLEAR buttons (drawn inside the field, right-aligned).
+        if (textEditable) {
+            auto drawBtn = [&](const ofRectangle& b, const std::string& label){
+                ofSetColor(40, 44, 48); ofDrawRectangle(b);
+                ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(96, 104, 100); ofDrawRectangle(b); ofFill();
+                ofRectangle bb = fUI.getStringBoundingBox(label, 0, 0);
+                ofSetColor(186, 192, 188); fUI.drawString(label, floorf(b.x + (b.width - bb.width) * 0.5f - bb.x), floorf(b.y + (b.height - bb.height) * 0.5f - bb.y));
+            };
+            drawBtn(f.pasteBox, "PASTE"); drawBtn(f.clearBox, "CLEAR");
+        }
+        // Address validity — a small green/red dot (green = will be broadcast), left of the buttons.
         if (f.sp && !f.sp->empty() && (isBech || f.label == "Lightning Address")) {
             bool v = (f.label == "Lightning Address") ? gsValidLightning(*f.sp) : gsValidAddr(*f.sp);
-            ofSetColor(v ? ofColor(120, 200, 150) : ofColor(212, 120, 110)); ofDrawCircle(f.box.getMaxX() - 12 * S, fy - 8 * S, 4 * S);
+            float dotX = (f.pasteBox.width > 0 ? f.pasteBox.x - 12 * S : f.box.getMaxX() - 12 * S);
+            ofSetColor(v ? ofColor(120, 200, 150) : ofColor(212, 120, 110)); ofDrawCircle(dotX, fy - 8 * S, 4 * S);
         }
         if (f.folder)           { ofSetColor(120, 126, 124); std::string h = "click to choose folder"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (foc && fmodf(t, 1.0f) < 0.55f) {                          // blinking cursor — tracks the visible (scrolled) tail
@@ -2458,6 +2480,18 @@ void ofApp::mousePressed(int x, int y, int button) {
         for (size_t i = 0; i < fields.size(); i++) {
             if (fields[i].tab != settingsTab) continue;                // hidden tab — its .box is stale from when it was last drawn
             if (fields[i].header) continue;                            // section dividers aren't clickable
+            // In-field PASTE / CLEAR buttons (take precedence over entering edit mode).
+            if (fields[i].pasteBox.width > 0 && fields[i].pasteBox.inside(fx, fy)) {
+                if (editingField >= 0 && editingField != (int)i) commitField(fields[editingField]);
+                editingField = (int)i; fields[i].buf = fieldText(fields[i]);
+                std::string clip = gsClipboard();
+                for (char c : clip) if ((unsigned char)c >= 32 && (unsigned char)c < 127) fields[i].buf += c;
+                commitField(fields[i]); return;
+            }
+            if (fields[i].clearBox.width > 0 && fields[i].clearBox.inside(fx, fy)) {
+                if (editingField >= 0 && editingField != (int)i) commitField(fields[editingField]);
+                editingField = (int)i; fields[i].buf.clear(); commitField(fields[i]); return;
+            }
             if (fields[i].box.inside(fx, fy)) {
                 if (fields[i].locked || (fields[i].gateBackup && !sWalletBackedUp)) { editingField = -1; return; }   // read-only (registered name; or donation field before Wallet Backed Up = YES)
                 if (fields[i].folder) { pickRecDir(); editingField = -1; }   // folder field: open the native chooser (SAVE persists it)
