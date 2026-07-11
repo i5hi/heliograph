@@ -3,6 +3,7 @@
 #include "ofMain.h"
 #include <mutex>
 #include <vector>
+#include <map>
 
 struct Star { glm::vec2 p; float r, base, ph; };
 struct Env  { float v = 0, atk = 0.40f, rel = 0.08f; float process(float t){ v += (t > v ? atk : rel) * (t - v); return v; } };
@@ -263,6 +264,14 @@ public:
     std::vector<Field> fields;
     bool  settingsOpen = false;
     int   editingField = -1;
+    // Settings are NOT autosaved: field edits mutate the in-memory config live (for the CHANNEL preview
+    // etc.), but ESC discards them. We snapshot every field's target when the dialog opens (and after a
+    // SAVE — the new baseline), and revert to it on ESC.
+    std::map<std::string*, std::string> snapS;
+    std::map<int*, int> snapI;
+    std::map<float*, float> snapF;
+    void snapshotFields();   // capture current field values as the baseline
+    void revertFields();     // restore the baseline (ESC = discard unsaved edits)
     int   settingsTab = 0;         // which settings-dialog tab is showing: 0 SESSION · 1 ROUTING · 2 REGISTER · 3 CHANNEL
     ofRectangle settingsTabBox[4]; // clickable tab chips, sized/positioned in drawSettings()
     float saveFlash = -10;        // timestamp of last successful save (drives the "SAVED ✓" flash)

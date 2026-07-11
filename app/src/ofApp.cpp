@@ -1567,6 +1567,22 @@ void ofApp::commitField(Field& f) {
     else if (f.ip) *f.ip = ofToInt(f.buf);
     else if (f.fp) *f.fp = ofToFloat(f.buf);
 }
+// Capture the current field values as the baseline (dialog open + after SAVE). ROUTING device/channel are
+// a LIVE audition, not saved config — they apply immediately and are excluded from the snapshot.
+void ofApp::snapshotFields() {
+    snapS.clear(); snapI.clear(); snapF.clear();
+    for (auto& f : fields) {
+        if (f.sp) snapS[f.sp] = *f.sp;
+        else if (f.ip) { if (f.ip != &sInputDeviceIdx && f.ip != &sInputChannelPair) snapI[f.ip] = *f.ip; }
+        else if (f.fp) snapF[f.fp] = *f.fp;
+    }
+}
+// Restore the baseline — ESC discards unsaved edits (settings never autosave).
+void ofApp::revertFields() {
+    for (auto& kv : snapS) *kv.first = kv.second;
+    for (auto& kv : snapI) *kv.first = kv.second;
+    for (auto& kv : snapF) *kv.first = kv.second;
+}
 void ofApp::buildFields() {
     fields.clear();
     // Each add* helper tags the field with curTab, so drawSettings()/mousePressed() can show only
@@ -1690,7 +1706,7 @@ void ofApp::writeSession() {
     j["coordinates"]["heading"]  = sHeading;
     j["coordinates"]["distance"] = sDist;
     std::ofstream o(gsSessionPath());
-    if (o) { o << j.dump(2); o.close(); saveFlash = t; ofLogNotice() << "session.json saved"; }
+    if (o) { o << j.dump(2); o.close(); saveFlash = t; snapshotFields(); ofLogNotice() << "session.json saved"; }   // SAVE is the new baseline (so a later ESC won't revert saved values)
     if (broadcasting) lastSnapshotT = -100;   // SAVE → push a fresh snapshot NOW so config changes (incl. cleared donation addresses when Wallet Backed Up flips to NO) reach the client immediately
     else   { ofLogError() << "session.json: could not open for writing"; }
 }
@@ -2419,7 +2435,7 @@ void ofApp::keyPressed(int key) {
         return;
     }
     if (settingsOpen) {                                   // editor captures all keys
-        if (key == OF_KEY_ESC) { settingsOpen = false; editingField = -1; }
+        if (key == OF_KEY_ESC) { revertFields(); settingsOpen = false; editingField = -1; }   // ESC = discard unsaved edits
         else if (editingField >= 0) {
             Field& f = fields[editingField];
             bool cmdHeld = ofGetKeyPressed(OF_KEY_LEFT_SUPER) || ofGetKeyPressed(OF_KEY_RIGHT_SUPER) ||
@@ -2444,7 +2460,7 @@ void ofApp::keyPressed(int key) {
         return;
     }
     if (key == OF_KEY_ESC) { if (recWarn) recWarn = false; else if (modPickKind >= 0) modPickKind = -1; else if (helpMode) helpMode = false; else showHelp = false; return; }
-    if (key == 's' || key == 'S') { buildFields(); settingsOpen = true; editingField = -1; settingsTab = 0; return; }   // 'S' = settings — rebuilds ROUTING's device list fresh each time
+    if (key == 's' || key == 'S') { buildFields(); snapshotFields(); settingsOpen = true; editingField = -1; settingsTab = 0; return; }   // 'S' = settings — rebuild fields + snapshot the baseline (ESC reverts to it)
     if (key == 'c' || key == 'C') showPanel = !showPanel;                        // 'C' = controls (config panels)
     else if (key == 'h' || key == 'H') showHelp = !showHelp;                     // help overlay (all shortcuts)
     else if (key == 'i' || key == 'I') helpMode = !helpMode;                     // parameter help: hover any control for an explainer
