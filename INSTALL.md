@@ -116,6 +116,54 @@ Press **`S`** → **CHANNEL** to set how your channel looks on the listener's pl
 
 ---
 
+## 6. Broadcast your laptop's audio (virtual audio channel)
+
+heliograph visualizes an **input** device (a mic, an interface, etc.). To broadcast **whatever is playing
+on your computer** — Spotify, a DAW, a browser — you route your system *output* into a **virtual audio
+channel** (a "loopback" device) and point heliograph's input at it. **This is the easiest way to just
+broadcast your laptop output**, and it's the same idea on every platform:
+
+> **system output → virtual channel → heliograph input**
+
+Pick your OS below. Afterwards, in heliograph do `S → ROUTING → Input Device → <the virtual device>`,
+Channels **1-2**, and press **`B`** to go live.
+
+### macOS — BlackHole
+
+1. Install **[BlackHole 2ch](https://existential.audio/blackhole/)** (free).
+2. **System Settings → Sound → Output → BlackHole 2ch.** All system audio now flows into BlackHole.
+3. heliograph: `S → ROUTING → Input Device → **BlackHole 2ch**`, Channels **1-2**. Play something — the
+   SIGNAL meter should react. (No signal? Grant Microphone permission — see Troubleshooting.)
+4. **To also hear the audio yourself:** open **Audio MIDI Setup**, click **+ → Create Multi-Output
+   Device**, tick **both** BlackHole 2ch **and** your speakers/headphones, then set that Multi-Output
+   Device as the system Output instead of BlackHole alone.
+
+### Linux — PulseAudio / PipeWire monitor (no install needed)
+
+Linux already exposes a loopback of every output: the **monitor source** of your sink. Nothing to install.
+
+1. Just launch heliograph and open `S → ROUTING → Input Device`. Look for an entry named like
+   **"Monitor of <your output>"** (e.g. *Monitor of Built-in Audio Analog Stereo*) and select it. Play
+   audio → the meter reacts. You keep hearing everything normally — the monitor is a passive tap.
+2. If no monitor appears in the list, expose/select it, then click **REFRESH DEVICE LIST**:
+   - **PipeWire** (most modern distros): use `pavucontrol` → **Recording** tab, and while heliograph is
+     capturing, set its stream's source to **Monitor of …**. Or `wpctl status` to find the monitor.
+   - **PulseAudio**: `pactl list sources short` lists the `*.monitor` sources; `pavucontrol` lets you
+     pick it per-app. `pactl load-module module-loopback` can also bridge devices if needed.
+
+### Windows — VB-CABLE (or Stereo Mix)
+
+1. Install **[VB-CABLE](https://vb-audio.com/Cable/)** (free virtual audio cable).
+2. **Settings → System → Sound → Output → CABLE Input (VB-Audio Virtual Cable).** System audio now flows
+   into the cable.
+3. heliograph: `S → ROUTING → Input Device → **CABLE Output (VB-Audio Virtual Cable)**`, Channels **1-2**.
+4. **To also hear it yourself:** Sound → **More sound settings → Recording → CABLE Output → Properties →
+   Listen → "Listen to this device" → Playback through your speakers**. (Alternatively some sound cards
+   expose **"Stereo Mix"** as a recording device — enable it under Recording and select it in heliograph;
+   no VB-CABLE needed.)
+
+---
+
 ## Troubleshooting
 
 - **"You need an account on this server to broadcast"** — you haven't registered. Do step 4 first.
@@ -135,17 +183,13 @@ Work through these in order:
 2. **Select the right input.** `S → ROUTING → Input Device` — pick the device carrying your sound, then
    cycle **Channels** until the meter jumps. If a device you just created/plugged in isn't listed, click
    **REFRESH DEVICE LIST**.
+3. **Broadcasting your laptop's own audio?** You need a virtual audio channel — see
+   [§6](#6-broadcast-your-laptops-audio-virtual-audio-channel).
 
-### Capturing system audio with BlackHole (macOS)
+### No signal (Linux / Windows)
 
-heliograph visualizes an **input** device, so to feed it your computer's own output you route through a
-loopback device like [BlackHole](https://existential.audio/blackhole/) (2ch):
-
-1. Install BlackHole 2ch.
-2. **System Settings → Sound → Output → BlackHole 2ch.** (Now all system audio flows *into* BlackHole —
-   and you won't hear it on your speakers; see step 4 to fix that.)
-3. In heliograph: `S → ROUTING → Input Device → **BlackHole 2ch**`, Channels **1-2**. Play something —
-   the SIGNAL meter should react. (Still nothing? Do the mic-permission step above.)
-4. **To also hear the audio while broadcasting:** open **Audio MIDI Setup**, create a **Multi-Output
-   Device** containing *both* **BlackHole 2ch** and your speakers/headphones, and set **that** as the
-   system Output instead of BlackHole alone. Audio then plays out loud *and* into BlackHole for heliograph.
+- **Linux** — pick the **"Monitor of <your output>"** source in `S → ROUTING`; if it's missing, expose it
+  via `pavucontrol`/`pactl` (see §6). No mic permission needed.
+- **Windows** — if a virtual cable's output isn't listed, reopen `S → ROUTING` after installing it and
+  click **REFRESH DEVICE LIST**; confirm the app has Microphone access under **Settings → Privacy →
+  Microphone**.
