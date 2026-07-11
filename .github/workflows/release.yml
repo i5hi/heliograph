@@ -91,6 +91,10 @@ jobs:
 
       - name: Install openFrameworks dependencies
         run: |
+          sudo apt-get update
+          # ubuntu-22.04 runners hold libgstreamer1.0-dev back on an unmet libunwind-dev dep — pre-install
+          # it so OF's install_dependencies.sh doesn't hit "held broken packages".
+          sudo apt-get install -y libunwind-dev
           cd "$OF_DIR/scripts/linux/ubuntu"
           sudo ./install_dependencies.sh -y || sudo ./install_dependencies.sh
 
@@ -147,7 +151,8 @@ jobs:
         shell: pwsh
         run: |
           $pg = Get-ChildItem "$env:OF_DIR\projectGenerator*" -Recurse -Filter projectGenerator.exe | Select-Object -First 1
-          & $pg.FullName -o"$env:OF_DIR" "$env:OF_DIR\apps\myApps\heliograph"
+          # -p vs = target the Visual Studio platform (without it, "target platform is: []" → exit 1)
+          & $pg.FullName -o"$env:OF_DIR" -p"vs" "$env:OF_DIR\apps\myApps\heliograph"
 
       - uses: microsoft/setup-msbuild@v2
 
