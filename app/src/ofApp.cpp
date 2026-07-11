@@ -1819,7 +1819,17 @@ void ofApp::drawSettings() {
         std::string txt = foc ? f.buf
                         : (f.secret ? (f.sp && !f.sp->empty() ? "********" : "(not set)")
                         : (isBech && f.sp && !f.sp->empty() ? gsGroup4(*f.sp) : fieldText(f)));
-        ofSetColor(inert ? ofColor(90, 94, 96) : ofColor(220, 226, 222)); fValue.drawString(gateOff ? "" : txt, f.box.x + 14 * S, fy);
+        // Keep long values (e.g. a Liquid address) INSIDE the box — no overflow past the panel. While
+        // editing, scroll to show the TAIL (caret stays visible); at rest, truncate the end with an ellipsis.
+        float maxTxtW = f.box.width - 30 * S;
+        std::string vis = txt;
+        if (foc) { while (vis.size() > 1 && fValue.stringWidth(vis) > maxTxtW) vis = vis.substr(1); }
+        else if (fValue.stringWidth(vis) > maxTxtW) {
+            std::string ell = "\xE2\x80\xA6";
+            while (vis.size() > 1 && fValue.stringWidth(vis + ell) > maxTxtW) vis.pop_back();
+            vis += ell;
+        }
+        ofSetColor(inert ? ofColor(90, 94, 96) : ofColor(220, 226, 222)); fValue.drawString(gateOff ? "" : vis, f.box.x + 14 * S, fy);
         if (f.locked)  { ofSetColor(120, 126, 124); std::string h = "[locked while registered]"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (gateOff)   { ofSetColor(120, 126, 124); std::string h = "set Wallet Backed Up = YES to enter"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (!f.choices.empty()) { ofSetColor(120, 126, 124); std::string h = "click to toggle"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
@@ -1829,8 +1839,8 @@ void ofApp::drawSettings() {
             ofSetColor(v ? ofColor(120, 200, 150) : ofColor(212, 120, 110)); ofDrawCircle(f.box.getMaxX() - 12 * S, fy - 8 * S, 4 * S);
         }
         if (f.folder)           { ofSetColor(120, 126, 124); std::string h = "click to choose folder"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
-        if (foc && fmodf(t, 1.0f) < 0.55f) {                          // blinking cursor
-            float cx = f.box.x + 16 * S + fValue.stringWidth(f.buf);
+        if (foc && fmodf(t, 1.0f) < 0.55f) {                          // blinking cursor — tracks the visible (scrolled) tail
+            float cx = f.box.x + 16 * S + fValue.stringWidth(vis);
             ofSetColor(cNeon); ofDrawRectangle(cx, fy - 20 * S, 2 * S, 26 * S);
         }
         if (f.label == "Note") { ofSetColor(112, 118, 116); std::string in = "Title & Note appear in the bottom-left of your live recording"; fUI.drawString(in, f.box.getMaxX() - fUI.stringWidth(in), fy + 32 * S); }   // info line (right-aligned to the field edge)
