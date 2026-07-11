@@ -202,7 +202,7 @@ session · **HDG** = the detected primary sub-frequency, shown as a bearing + no
 `R` records **native 1440p H.264** video with the audio muxed in — a **single MP4** (AAC 320k),
 ready for upload, no separate audio file. Filename is composed from your session fields (lowercased):
 ```
-heliograph-txn001-amo_eba.mp4      # 1440p video + audio, one file
+heliograph-txn001-artist.mp4      # 1440p video + audio, one file
 ```
 - **First time you record**, a folder picker asks where to save. Your choice is remembered (and
   editable any time under **`E` → Recordings**). Recordings always go into a **`HelioRecordings/`**

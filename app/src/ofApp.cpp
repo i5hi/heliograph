@@ -2155,13 +2155,13 @@ void ofApp::drawParamHelp() {
 //--------------------------------------------------------------
 std::string ofApp::recBaseName() const {
     auto pad = [](int v, int w){ std::string s = ofToString(v); while ((int)s.size() < w) s = "0" + s; return s; };
-    std::string raw = sArtifact + "-" + sShorthand + pad(sTransmission, 3) + "-" + sArtist + "-" + sTitle;   // e.g. HelioGraph-TxN001-amo_eba-Deuce
+    std::string raw = sArtifact + "-" + sShorthand + pad(sTransmission, 3) + "-" + sArtist + "-" + sTitle;   // e.g. HelioGraph-TxN001-artist-Deuce
     std::string safe; for (char c : raw) {                                                    // lowercase + sanitise
         if (isalnum((unsigned char)c))      safe += (char)tolower((unsigned char)c);
         else if (c == '_' || c == '-')      safe += c;
         else                                safe += '_';
     }
-    return safe;   // -> heliograph-txn001-amo_eba
+    return safe;   // -> heliograph-txn001-artist
 }
 std::string ofApp::recDir() {
     if (!sRecDir.empty()) {                                    // user-chosen parent -> always a HelioRecordings/ subfolder inside it
