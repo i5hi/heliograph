@@ -53,7 +53,7 @@ public:
     std::string sSnapshotUrl = "", sSnapshotToken = "";
     // ---- artist registration (REGISTER section): the broadcast config above is filled in by the
     //      server's /register response — the artist enters a server + invite code + name, not raw hosts.
-    std::string sRegServer = "https://radio.stackmate.org";   // registration/broadcast server base URL
+    std::string sRegServer = "http://localhost:8090";         // registration/broadcast server base URL — defaults to a LOCAL heliod stack; change it in S -> REGISTER to point at a real station
     std::string sInviteCode = "";                             // single-use invite code (consumed on register)
     std::string sChannelId = "";                              // hashed channel id returned by the server (mount)
     bool   sRegistered = false;                               // true once a successful /register response is saved

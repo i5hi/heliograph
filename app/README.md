@@ -223,7 +223,7 @@ heliograph-txn001-artist.mp4      # 1440p video + audio, one file
 `B` starts/stops a **live** Icecast audio stream + periodic visualizer snapshot, independent of
 `R` — record, broadcast, both, or neither, in any combination. Pairs with the sibling
 **`heliograph-server`** repo (Icecast + a small snapshot API behind Caddy) and a web client at your
-listening site (e.g. `psymacha.org`).
+listening site (the heliod client).
 
 Configure under **`E` → BROADCAST** (see §5):
 
