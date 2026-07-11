@@ -12,6 +12,11 @@ on:
   release:
     types: [published]
   workflow_dispatch: {}        # lets you test the build without cutting a release
+  # TEMPORARY (CI debugging): build on pushes that touch the workflow or the app, so fixes can be
+  # verified without a token that has workflow-dispatch scope. Remove before/after the release is green.
+  push:
+    branches: [trunk]
+    paths: ['.github/workflows/release.yml', 'app/**']
 
 permissions:
   contents: write              # needed to upload assets to the release
