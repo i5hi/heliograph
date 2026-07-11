@@ -199,7 +199,7 @@ public:
     bool  showPanel = true, recording = false;
     float recStart = 0;
     bool  showHud = true, autoShot = true;
-    bool  showMeter = false;  // 'V' — show/hide a horizontal audio level meter along the bottom of the screen. SCREEN ONLY (drawn after the FBO), never part of the recording/broadcast — a performance monitor for the artist.
+    bool  showMeter = true;   // 'V' — show/hide a horizontal audio level meter along the bottom of the screen. ON by default. SCREEN ONLY (drawn after the FBO), never part of the recording/broadcast — a performance monitor.
     bool  showMeta = false;   // 'T' — show/hide the SIGNAL indicator + session metadata/telemetry text in the frame. Default OFF: the frame (recording + client snapshot) is a clean visualizer; the client renders the metadata itself from what heliograph sends.
 
     // ---- MODULATION (right "MODULATION" tab): AUDIO MOD + LFO MOD, each up to 3 destinations ----
