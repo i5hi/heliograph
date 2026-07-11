@@ -19,10 +19,11 @@ heliograph_frame.png
 # ---- local/dev only ----
 # a stray session at the repo root (the real one lives in ~/.heliograph/)
 /session.json
-app/src/.bak_*/          # local source backups
-app/_pristine_backup/    # dev reference copies
-app/_scaffold_ref/       # dev reference copies
-CHANGES_*.md             # local working notes
+# local source backups / dev reference copies / working notes
+app/src/.bak_*/
+app/_pristine_backup/
+app/_scaffold_ref/
+CHANGES_*.md
 
 # ---- macOS / Xcode build output ----
 app/build/
@@ -34,7 +35,8 @@ DerivedData/
 
 # ---- Linux (openFrameworks Makefile) build output ----
 app/obj/
-app/bin/heliograph        # compiled Linux binary
+# compiled Linux binary
+app/bin/heliograph
 **/*.o
 *.d
 
