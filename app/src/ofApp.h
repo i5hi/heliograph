@@ -7,7 +7,7 @@
 struct Star { glm::vec2 p; float r, base, ph; };
 struct Env  { float v = 0, atk = 0.40f, rel = 0.08f; float process(float t){ v += (t > v ? atk : rel) * (t - v); return v; } };
 struct Slider { std::string name; float* val = nullptr; float def = 0; float lo = 0, hi = 1; int side = 0; bool intStep = false; int prec = 2; bool reactive = false; int show = 0; int tab = -1; ofRectangle track; std::vector<std::string> opts; std::vector<ofRectangle> boxes; bool icons = false; bool toggleMask = false; };  // toggleMask: opts are independent on/off bits (value is a bitmask), not a single radio choice  // show: 0 always·1 radial·2 grid · tab: -1 left/always · 0 LAYOUT · 1 AUDIO right-tab · opts=>radio · icons=>shapes
-struct Field  { std::string label; std::string* sp = nullptr; int* ip = nullptr; float* fp = nullptr; std::string buf; ofRectangle box; std::vector<std::string> choices; std::string* op = nullptr; bool folder = false; };  // editable session field (choices != empty => selector; op set => last choice "OTHER" is a free-text field; folder => click opens a folder picker)
+struct Field  { std::string label; std::string* sp = nullptr; int* ip = nullptr; float* fp = nullptr; std::string buf; ofRectangle box; std::vector<std::string> choices; std::string* op = nullptr; bool folder = false; bool header = false; bool secret = false; bool locked = false; bool gateBackup = false; int tab = 0; };  // gateBackup => greyed out + read-only until "Wallet Backed Up" = YES (donation protection)  // locked => read-only (e.g. artist name once registered — it defines the channel id)  // editable settings-dialog field (choices != empty => selector; op set => last choice "OTHER" is a free-text field; folder => click opens a folder picker; header => section label, no control; secret => masked when not focused (passwords/tokens); tab => which settings-dialog tab (0 SESSION · 1 ROUTING · 2 BROADCAST) this belongs to
 struct ModSlot { int dest = -1; float base = 0, amt = 0; bool bipolar = false; };  // modulation: dest = slider index · base = set value · amt = target · bipolar = LFO swings ± around base
 
 class ofApp : public ofBaseApp {
@@ -30,12 +30,68 @@ public:
     ofSoundStream stream;
     int    sampleRate = 48000, bufferSize = 512;   // requested; replaced by the device's actual rate at setup
     std::string deviceName = "(none)";
+    // ---- audio routing (input device + channel selection, ROUTING section of the settings editor) ----
+    std::string sInputDevice = "";          // persisted device name; "" = auto-detect (loopback keyword match / first input)
+    int    sInputDeviceIdx = 0;             // UI state: index into audioDeviceChoices (0 = Auto)
+    int    sInputChannelPair = 0;           // persisted + UI state: 0-based stereo-pair index into the device's channels
+    int    sInputChannelPairAtOpen = 0;     // snapshot taken when the settings dialog (re)builds fields, to detect a change on SAVE
+    std::vector<std::string> audioDeviceChoices;   // "Auto" + names of input-capable devices; refreshed each time settings opens
+    int    captureChannels = 0;             // channel count actually requested from the stream (device's, capped)
+    int    activeChannelOffset = 0;         // resolved 0-based channel index audioIn() reads from (= sInputChannelPair*2, clamped)
+    ofRectangle refreshDevicesBox;           // ROUTING tab's "REFRESH DEVICE LIST" button
+    void   refreshAudioDevices();            // closes + reopens the stream to force a hardware rescan, then rebuilds the device list
+    void   applyChannelSelection();          // recompute activeChannelOffset + recChannels from sInputChannelPair (live — no stream reopen; the stream already carries every channel)
+
+    // ---- broadcast (live Icecast forwarding + snapshot push, BROADCAST section of the settings editor) ----
+    FILE*  icePipe = nullptr;                     // ffmpeg subprocess piping PCM -> icecast:// (live, independent of local recording)
+    std::vector<short> broadcastAudioQueue;       // PCM queued by audioIn() (audio thread), drained + piped by update() (main thread)
+    bool   broadcasting = false;
+    bool   recStartedByBroadcast = false;   // B auto-started the recording (so stopping B stops that recording; a manual R recording is left alone)
+    float  broadcastStart = 0;                    // t when startBroadcast() ran — drives the ON AIR elapsed-time readout
+    std::string sIceHost = "", sIcePort = "8000", sIceMount = "live.mp3", sIcePassword = "";
+    std::string sSnapshotUrl = "", sSnapshotToken = "";
+    // ---- artist registration (REGISTER section): the broadcast config above is filled in by the
+    //      server's /register response — the artist enters a server + invite code + name, not raw hosts.
+    std::string sRegServer = "https://radio.stackmate.org";   // registration/broadcast server base URL
+    std::string sInviteCode = "";                             // single-use invite code (consumed on register)
+    std::string sChannelId = "";                              // hashed channel id returned by the server (mount)
+    bool   sRegistered = false;                               // true once a successful /register response is saved
+    std::string regStatus = "";                               // last registration result/error message (shown in the dialog)
+    float  regFlash = -10;                                    // timestamp of the last registration attempt (drives the status flash)
+    ofRectangle registerBox;                                  // the REGISTER button in the settings dialog
+    void   registerArtist();                                  // POST server/register {inviteCode, artist} -> save the returned broadcast config
+    void   verifyRegistration();                              // on startup: non-blocking GET server/whoami to confirm we're still registered server-side
+    bool   regVerifyPending = false;                          // a /whoami check is in flight (result polled in update())
+    float  regVerifyT = 0;                                    // t when the check was fired (for a give-up timeout)
+    // ---- channel appearance (CHANNEL tab): the artist owns how their channel looks on the listener
+    //      client — UI font + accent colour (channel display name = sChannel). These ride in the shared
+    //      snapshot metadata (X-Transmission), so SAVE + the next snapshot re-themes the live channel;
+    //      no separate endpoint. Font keys are SHARED verbatim with helio-client's FONTS list.
+    int    sFontIdx = 4;                                       // 0 plex · 1 jetbrains · 2 space · 3 sharetech · 4 vt323 (default)
+    std::string sAccent = "#ff3b30";                          // channel accent colour (hex) applied on the client
+    ofTrueTypeFont fPreview[5];                                // the 5 client faces, loaded for the live CHANNEL preview
+    float  fPreviewScale[5] = {1,1,1,1,1};                     // per-face scale so every preview shares one cap-height + baseline
+    // ---- donations (CHANNEL tab): a Bitcoin (bc1) and/or Liquid (lq1) address the client shows in a
+    //      room. Only broadcast once the artist confirms the wallet is backed up. Ride the shared metadata.
+    std::string sLnAddress  = "";                             // lightning address (user@domain, highest preference)
+    std::string sBtcAddress = "";                             // bc1… Bitcoin address (validated bech32/bech32m)
+    std::string sLqAddress  = "";                             // lq1… Liquid address (validated structurally)
+    int    sWalletBackedUp = 0;                               // 0 NO · 1 YES — gates broadcasting the addresses
+    float  lastSnapshotT = -100;                  // t of the last snapshot push
+    float  lastStreamTsT = -100;                  // t of the last in-stream timestamp injection (accurate audio-lag measurement)
+    void   pushStreamTimestamp();                 // inject wall-clock epoch-ms into the Icecast ICY metadata so the client can measure true end-to-end audio lag at the playhead
+    static constexpr float SNAPSHOT_INTERVAL = 15.0f;   // seconds between broadcast snapshot pushes — a crisp HD grab every 15s beats a blurry one every 1-2s
+    ofFbo  fboSnap;                                // HD (1080p) downscale target for the periodic JPEG snapshot push
+    void   startBroadcast();
+    void   stopBroadcast();
+    void   pushSnapshot();
     static constexpr int N = 2048;
     std::vector<float> ringBuf;
     int    writePos = 0;
     std::mutex mtx;
     std::vector<float> spectrum, spectrumSmooth;
     float  rms = 0;
+    float  peak = 0;   // decaying peak-hold of |sample| (0..1) — sent in snapshot metadata for the client console meters
     Env    levelE, bassE, midE, highE;
     float  level = 0, bass = 0, mid = 0, high = 0, prevBass = 0, beatEnv = 0;
     static constexpr int BANDS = 128;
@@ -142,6 +198,8 @@ public:
     bool  showPanel = true, recording = false;
     float recStart = 0;
     bool  showHud = true, autoShot = true;
+    bool  showMeter = false;  // 'V' — show/hide a horizontal audio level meter along the bottom of the screen. SCREEN ONLY (drawn after the FBO), never part of the recording/broadcast — a performance monitor for the artist.
+    bool  showMeta = false;   // 'T' — show/hide the SIGNAL indicator + session metadata/telemetry text in the frame. Default OFF: the frame (recording + client snapshot) is a clean visualizer; the client renders the metadata itself from what heliograph sends.
 
     // ---- MODULATION (right "MODULATION" tab): AUDIO MOD + LFO MOD, each up to 3 destinations ----
     //      A destination's value rides from its set value (base) toward the slot's target (amt),
@@ -187,10 +245,9 @@ public:
     // ---- HUD / session ----
     ofTrueTypeFont fKick, fTitle, fLabel, fValue, fNote, fUI, fBrand;   // fBrand = the HelioGraph Mk1 wordmark font
     int   sTransmission = 1;                 // EPISODE number
-    int   sMovement = 0;                     // session character: 0 FREEFORM · 1 COMPOSED · 2 OTHER (uses sMovementText)
     std::string sTitle = "UNTITLED", sDate = "", sArtist = "", sChannel = "TRANSMISSION",   // Channel = the big top-right title word
                 sNote = "", sWaypoint = "00·00·000";
-    std::string sShorthand = "TxN", sArtifact = "HelioGraph", sMovementText = "";   // filename series shorthand · artifact name · custom movement label
+    std::string sShorthand = "TxN", sArtifact = "HelioGraph";   // filename series shorthand · artifact name
     std::string sRecDir = "";                // chosen recordings folder ("" = default ~/.heliograph/recordings)
     std::string recBaseName() const;         // composes the recording filename from artifact + shorthand + episode + artist
     std::string recDir();                    // the active recordings folder (sRecDir if set, else the default), with trailing slash, created
@@ -206,6 +263,8 @@ public:
     std::vector<Field> fields;
     bool  settingsOpen = false;
     int   editingField = -1;
+    int   settingsTab = 0;         // which settings-dialog tab is showing: 0 SESSION · 1 ROUTING · 2 REGISTER · 3 CHANNEL
+    ofRectangle settingsTabBox[4]; // clickable tab chips, sized/positioned in drawSettings()
     float saveFlash = -10;        // timestamp of last successful save (drives the "SAVED ✓" flash)
     ofRectangle saveBox;
     void  buildFields();

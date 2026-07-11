@@ -143,6 +143,7 @@ Press **`H`** in-app for the full overlay. Quick reference:
 | `G` | show / hide the control panels (they're **never** captured in the recording) |
 | `E` | edit session details (Channel, Episode, Artist, Title, Note…) |
 | `R` | start / stop recording |
+| `B` | start / stop broadcast (live Icecast audio + snapshot push) — independent of `R` |
 | `M` | cycle mode (orbit · vehicle · platform · helix-static · helix-dynamic) |
 | `TAB` | toggle layout (radial / grid) — each layout keeps its own independent settings |
 | `X` | reset settings to defaults · `U` HUD on/off |
@@ -180,6 +181,14 @@ Press **`E`** to edit the broadcast fields live (saved with **SAVE**, which also
 - **Movement** — FREEFORM / COMPOSED / OTHER (type your own).
 - **Recordings** — the folder recordings are saved to (click to choose). See §6.
 
+Two more sections live further down the same dialog:
+
+- **ROUTING** — pick a specific audio **Input Device** (defaults to **Auto**, today's loopback
+  auto-detect) and which **Channels** pair to listen to on it — lets a multi-channel interface
+  (e.g. a Zoom L-8) feed heliograph directly, no DAW routing required. Rebuilt fresh every time
+  you open the dialog, so a just-plugged-in device shows up without restarting the app.
+- **BROADCAST** — Icecast Host/Port/Mount/Password and a Snapshot URL/Token, for `B` (see §7).
+
 The settings panel shows a live preview of the resulting recording filename at the bottom.
 Auto-generated, un-fakeable telemetry: **date** = system date · **waypoint** = randomised per
 session · **HDG** = the detected primary sub-frequency, shown as a bearing + note letter ·
@@ -209,7 +218,31 @@ heliograph-txn001-amo_eba.mp4      # 1440p video + audio, one file
 
 ---
 
-## 7. Tweaking the code
+## 7. Broadcast
+
+`B` starts/stops a **live** Icecast audio stream + periodic visualizer snapshot, independent of
+`R` — record, broadcast, both, or neither, in any combination. Pairs with the sibling
+**`heliograph-server`** repo (Icecast + a small snapshot API behind Caddy) and a web client at your
+listening site (e.g. `psymacha.org`).
+
+Configure under **`E` → BROADCAST** (see §5):
+
+- **Icecast Host / Port / Mount / Password** — where heliograph connects as an audio *source*.
+  Password is masked at rest in the dialog (shown while you're actively typing it).
+- **Snapshot URL / Token** — an HTTP endpoint heliograph `PUT`s a downscaled JPEG frame to every
+  1.5s while broadcasting (bearer-token authenticated); the web client polls it for a live preview.
+  Token is masked the same way as the Icecast password.
+
+Both connections are independent processes from local recording — the audio pipe runs through
+`ffmpeg` (same `popen` pattern as recording, just piped to `icecast://` instead of a file) and the
+snapshot push is a detached `curl` call, so a slow or dropped network connection never blocks
+rendering or audio capture. If the Icecast connection drops, `B` automatically stops broadcasting
+(check `/tmp/gs_broadcast.log` — or your OS's scratch dir per `gsScratch()` — for the `ffmpeg` log).
+An **ON AIR** indicator (amber, live-only, never captured) shows next to **REC** while broadcasting.
+
+---
+
+## 8. Tweaking the code
 
 - Defaults & slider ranges: `src/ofApp.h` **TWEAK ZONE** + `buildSliders()`.
 - Audio sensitivity / band mapping: `update()` (`fftGain`, `energy()` gains, the treble tilt).
@@ -219,7 +252,7 @@ heliograph-txn001-amo_eba.mp4      # 1440p video + audio, one file
 
 ---
 
-## 8. Releases (prebuilt binaries)
+## 9. Releases (prebuilt binaries)
 
 Publishing a GitHub **Release** triggers `.github/workflows/release.yml`, which builds and attaches:
 - **macOS** — a self-contained `heliograph.app` (the `data/` folder is copied into the bundle's

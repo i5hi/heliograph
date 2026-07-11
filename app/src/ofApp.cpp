@@ -3,6 +3,28 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <chrono>
+#include "ofAppGLFWWindow.h"
+#include <GLFW/glfw3.h>
+
+// System clipboard text (for Cmd/Ctrl+V into the settings fields — e.g. pasting an invite code).
+static std::string gsClipboard() {
+    if (auto* w = dynamic_cast<ofAppGLFWWindow*>(ofGetWindowPtr())) {
+        if (const char* s = glfwGetClipboardString(w->getGLFWWindow())) return std::string(s);
+    }
+    return "";
+}
+
+// Wall-clock epoch milliseconds — matches JavaScript Date.now() on the client, so end-to-end lag
+// subtractions line up. NOT ofGetSystemTimeMillis(): that returns oF's internal (monotonic/uptime)
+// clock, ~5 days of ms, never a real epoch — which broke the audio-lag + artist→server readouts.
+static long long gsEpochMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+#ifndef _WIN32
+  #include <csignal>
+#endif
 
 // ===========================================================================
 //  Platform portability — macOS keeps its original setup; Linux/Windows use
@@ -75,6 +97,83 @@ static std::string gsScratch(const std::string& f) {
     return ofToDataPath(f, true);
 #endif
 }
+// Single-quote a value for safe interpolation into a shell command line (BROADCAST fields —
+// Icecast password, snapshot URL/token — are free-typed by the artist, so this isn't optional).
+static std::string gsShQuote(const std::string& s) {
+    std::string q = "'";
+    for (char c : s) q += (c == '\'') ? "'\\''" : std::string(1, c);
+    q += "'";
+    return q;
+}
+// Channel-branding fonts. The KEY is shared verbatim with helio-client's FONTS list (client maps it to
+// a @font-face family) — heliograph only sends the key; it bundles the same faces to render the preview.
+static const int   kNumFonts = 5;
+static const char* kFontKeys[kNumFonts]   = { "plex", "jetbrains", "space", "sharetech", "vt323" };
+static const char* kFontLabels[kNumFonts] = { "IBM PLEX MONO", "JETBRAINS MONO", "SPACE MONO", "SHARE TECH MONO", "VT323" };
+static const char* kFontFiles[kNumFonts]  = { "fonts/IBMPlexMono-Regular.ttf", "fonts/JetBrainsMono.ttf",
+                                              "fonts/SpaceMono-Regular.ttf", "fonts/ShareTechMono-Regular.ttf",
+                                              "fonts/VT323-Regular.ttf" };
+// bech32/bech32m checksum (BIP173/350) — validates a bc1 Bitcoin address (witness v0 bech32 OR v1
+// taproot bech32m). Liquid lq1 addresses use blech32 (a different, longer checksum) — those are
+// validated structurally in gsValidAddr (charset + length), not by checksum.
+static bool gsBech32Verify(const std::string& hrp, const std::vector<int>& data, uint32_t want) {
+    static const uint32_t GEN[5] = { 0x3b6a57b2u, 0x26508e6du, 0x1ea119fau, 0x3d4233ddu, 0x2a1462b3u };
+    uint32_t chk = 1;
+    auto push = [&](int v) {
+        uint32_t b = chk >> 25;
+        chk = ((chk & 0x1ffffffu) << 5) ^ (uint32_t)v;
+        for (int i = 0; i < 5; i++) if ((b >> i) & 1) chk ^= GEN[i];
+    };
+    for (char c : hrp) push((unsigned char)c >> 5);
+    push(0);
+    for (char c : hrp) push((unsigned char)c & 31);
+    for (int v : data) push(v);
+    return chk == want;
+}
+// Accept a bc1 Bitcoin address (real bech32/bech32m checksum) OR an lq1 Liquid address (structural).
+static bool gsValidAddr(const std::string& addr) {
+    if (addr.size() < 14 || addr.size() > 130) return false;
+    for (char c : addr) if (c >= 'A' && c <= 'Z') return false;      // must be all-lowercase
+    bool isBtc = addr.rfind("bc1", 0) == 0, isLq = addr.rfind("lq1", 0) == 0;
+    if (!isBtc && !isLq) return false;
+    size_t sep = addr.rfind('1');
+    if (sep != 2) return false;                                       // hrp is exactly "bc"/"lq"
+    std::string data = addr.substr(sep + 1);
+    static const std::string CS = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+    std::vector<int> vals;
+    for (char c : data) { size_t p = CS.find(c); if (p == std::string::npos) return false; vals.push_back((int)p); }
+    if (isBtc) return vals.size() >= 6 && (gsBech32Verify("bc", vals, 1u) || gsBech32Verify("bc", vals, 0x2bc830a3u));
+    return vals.size() >= 30 && vals.size() <= 120;                   // lq1 blech32 — structural only
+}
+static std::string gsGroup4(const std::string& s) {
+    std::string out;
+    for (size_t i = 0; i < s.size(); i++) { if (i && i % 4 == 0) out += ' '; out += s[i]; }
+    return out;
+}
+// A Lightning address is email-like (user@domain.tld, LNURL-pay style) — validate structurally.
+static bool gsValidLightning(const std::string& s) {
+    if (s.size() < 3 || s.size() > 120) return false;
+    for (char c : s) if (c == ' ' || (c >= 'A' && c <= 'Z')) return false;   // no spaces, all-lowercase
+    size_t at = s.find('@');
+    if (at == std::string::npos || at == 0 || at != s.rfind('@')) return false;   // exactly one @, non-empty local part
+    std::string dom = s.substr(at + 1);
+    size_t dot = dom.find('.');
+    return dot != std::string::npos && dot > 0 && dot + 1 < dom.size();
+}
+// Standard base64 — used to carry the transmission metadata JSON (which may contain unicode
+// titles/notes) in an ASCII-only HTTP header on the snapshot push (see pushSnapshot).
+static std::string gsBase64(const std::string& in) {
+    static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0, bits = -6;
+    for (unsigned char c : in) {
+        val = (val << 8) + c; bits += 8;
+        while (bits >= 0) { out += T[(val >> bits) & 0x3F]; bits -= 6; }
+    }
+    if (bits > -6) out += T[((val << 8) >> (bits + 8)) & 0x3F];
+    while (out.size() % 4) out += '=';
+    return out;
+}
 
 // =============================================================================
 //  heliograph — where to tweak things
@@ -102,6 +201,9 @@ static void writeWav(const std::string& path, const std::vector<short>& d, int c
 
 //--------------------------------------------------------------
 void ofApp::setup() {
+#ifndef _WIN32
+    signal(SIGPIPE, SIG_IGN);   // a dropped Icecast connection must fail a pipe write, not kill the app
+#endif
     ofDisableArbTex();
     ofSetFrameRate(60);
     ofSetVerticalSync(true);
@@ -120,8 +222,11 @@ void ofApp::setup() {
     fboFinal.allocate(fs);
     ofFboSettings fr; fr.width = REC_W; fr.height = REC_H; fr.internalformat = GL_RGBA; fr.numSamples = 0; fr.useDepth = false;
     fboRec.allocate(fr);
+    ofFboSettings fsnap; fsnap.width = RW; fsnap.height = RH; fsnap.internalformat = GL_RGBA; fsnap.numSamples = 0; fsnap.useDepth = false;
+    fboSnap.allocate(fsnap);   // FULL native render res (2560x1440) — a 1:1 copy of fboFinal, no downscale. Lossless PNG every SNAPSHOT_INTERVAL s, so max quality with no compromise; bandwidth is fine at 15s cadence
     fboFinal.getTexture().setTextureMinMagFilter(GL_LINEAR, GL_LINEAR);
     fboRec.getTexture().setTextureMinMagFilter(GL_LINEAR, GL_LINEAR);
+    fboSnap.getTexture().setTextureMinMagFilter(GL_LINEAR, GL_LINEAR);
 
     stars.clear();
     for (int i = 0; i < 200; i++) {
@@ -144,10 +249,17 @@ void ofApp::setup() {
     loadFont(fNote,   reg, (int)(16 * S));
     loadFont(fUI,     reg, (int)(13 * S));
     loadFont(fBrand,  reg, (int)(15 * S)); fBrand.setLetterSpacing(1.5f);   // HelioGraph Mk1 wordmark (usual Saira font, roomy letterspacing)
+    for (int i = 0; i < kNumFonts; i++) loadFont(fPreview[i], kFontFiles[i], (int)(22 * S));   // CHANNEL tab: live font preview
+    // Normalize the preview faces: each has a different cap-height at the same point size (VT323 reads
+    // small + low). Scale each so its uppercase cap-height matches the tallest, drawn from one baseline.
+    { float target = 0; float capH[kNumFonts];
+      for (int i = 0; i < kNumFonts; i++) { capH[i] = fPreview[i].getStringBoundingBox("HNXO", 0, 0).height; target = std::max(target, capH[i]); }
+      for (int i = 0; i < kNumFonts; i++) fPreviewScale[i] = (capH[i] > 0.1f) ? target / capH[i] : 1.0f; }
     ofSetEscapeQuitsApp(false);   // ESC closes the settings/help overlay — it must NOT quit the app
 
     seedUserData();               // first launch: create ~/.heliograph/ (session.json + factory presets) from bin/data
     loadSession();
+    verifyRegistration();         // on startup: non-blocking check that we're still registered server-side
     if (!ofFile::doesFileExist(gsSessionPath())) writeSession();   // belt-and-suspenders: if no factory file shipped, persist defaults
     buildFields();
     buildSliders();
@@ -185,11 +297,33 @@ void ofApp::loadSession() {
             sArtist  = j.value("artist", sArtist);
             sChannel = j.value("channel", sChannel);
             sNote    = j.value("note", sNote);
-            sMovement = j.value("movement", 0);
-            sMovementText = j.value("movementText", sMovementText);
+            sAccent  = j.value("accent", sAccent);
+            if (j.contains("donations")) { auto& d = j["donations"];
+                sLnAddress = d.value("ln", sLnAddress); sBtcAddress = d.value("btc", sBtcAddress);
+                sLqAddress = d.value("lq", sLqAddress); sWalletBackedUp = d.value("backedUp", 0); }
+            { std::string fk = j.value("font", std::string(kFontKeys[sFontIdx]));   // CHANNEL font, stored as a key
+              for (int i = 0; i < kNumFonts; i++) if (fk == kFontKeys[i]) { sFontIdx = i; break; } }
             sArtifact  = j.value("artifact", sArtifact);
             sShorthand = j.value("shorthand", sShorthand);
             sRecDir    = j.value("recDir", sRecDir);
+            sInputDevice      = j.value("inputDevice", sInputDevice);
+            sInputChannelPair = j.value("inputChannelPair", sInputChannelPair);
+            if (j.contains("broadcast")) {
+                auto& b = j["broadcast"];
+                sIceHost       = b.value("iceHost", sIceHost);
+                sIcePort       = b.value("icePort", sIcePort);
+                sIceMount      = b.value("iceMount", sIceMount);
+                sIcePassword   = b.value("icePassword", sIcePassword);
+                sSnapshotUrl   = b.value("snapshotUrl", sSnapshotUrl);
+                sSnapshotToken = b.value("snapshotToken", sSnapshotToken);
+            }
+            if (j.contains("registration")) {
+                auto& r = j["registration"];
+                sRegServer  = r.value("server", sRegServer);
+                sChannelId  = r.value("channelId", sChannelId);
+                sRegistered = r.value("registered", false);
+                if (sRegistered) regStatus = "Registered as " + sArtist;
+            }
         } catch (...) { ofLogError() << "session.json parse failed"; }
     }
     // date is always the system date — sessions capture live, so it can't be edited or faked
@@ -334,50 +468,107 @@ void ofApp::setupAudio() {
     ofSoundStreamSettings s;
     auto devices = stream.getDeviceList();
     int chosen = -1;
+    if (!sInputDevice.empty()) {                        // an explicit device was picked in ROUTING — try it first
+        for (size_t i = 0; i < devices.size(); i++)
+            if (devices[i].inputChannels > 0 && devices[i].name == sInputDevice) { chosen = (int)i; break; }
+        if (chosen < 0) ofLogWarning() << "saved input device \"" << sInputDevice << "\" not found — falling back to auto-detect";
+    }
     // prefer a virtual loopback device by name (cross-platform): BlackHole (mac),
     // VB-Audio Cable / VoiceMeeter (Windows), PulseAudio monitor / JACK / loopback (Linux)
-    const char* keys[] = { "blackhole", "cable", "vb-audio", "voicemeeter", "loopback", "monitor", "jack" };
-    for (size_t i = 0; i < devices.size() && chosen < 0; i++) {
-        if (devices[i].inputChannels <= 0) continue;
-        std::string nm = ofToLower(devices[i].name);
-        for (const char* k : keys) if (nm.find(k) != std::string::npos) { chosen = (int)i; break; }
+    if (chosen < 0) {
+        const char* keys[] = { "blackhole", "cable", "vb-audio", "voicemeeter", "loopback", "monitor", "jack" };
+        for (size_t i = 0; i < devices.size() && chosen < 0; i++) {
+            if (devices[i].inputChannels <= 0) continue;
+            std::string nm = ofToLower(devices[i].name);
+            for (const char* k : keys) if (nm.find(k) != std::string::npos) { chosen = (int)i; break; }
+        }
     }
     if (chosen < 0)                                    // fallback: first available input (route your loopback as default)
         for (size_t i = 0; i < devices.size(); i++) if (devices[i].inputChannels > 0) { chosen = (int)i; break; }
     if (chosen < 0) {
         deviceName = "(no signal)";
+        captureChannels = 0; activeChannelOffset = 0; recChannels = 2;
         ofLogError() << "No audio input found — set up a loopback device (see README: Audio routing).";
         return;
     }
     s.setInDevice(devices[chosen]);
     deviceName = devices[chosen].name;
-    recChannels = std::min(2, std::max(1, (int)devices[chosen].inputChannels));
+    // Request the device's whole channel bus (capped) rather than just the first stereo pair, so a
+    // multi-channel interface (e.g. a Zoom L-8) can have any pair selected in software below — RtAudio's
+    // per-stream channel offset isn't exposed through ofSoundStreamSettings, so we take everything and slice.
+    int devCh = std::max(1, (int)devices[chosen].inputChannels);
+    captureChannels = std::min(devCh, 16);
+    applyChannelSelection();   // sets activeChannelOffset + recChannels from sInputChannelPair
+    // Prefer the current rate if this device actually advertises support for it; otherwise adopt one
+    // it does support. Forcing an unsupported rate (e.g. requesting 48000 on a device that only lists
+    // 44100) throws kAudioDeviceUnsupportedFormatError on CoreAudio and opens a stream that produces
+    // zero audio callbacks — no error surfaces to the rest of the app, it just silently goes quiet.
+    int requestRate = sampleRate;
+    if (!devices[chosen].sampleRates.empty()) {
+        bool supported = false;
+        for (auto r : devices[chosen].sampleRates) if ((int)r == requestRate) { supported = true; break; }
+        if (!supported) requestRate = (int)devices[chosen].sampleRates.front();
+    }
     s.setInListener(this);
-    s.sampleRate = sampleRate; s.numInputChannels = recChannels; s.numOutputChannels = 0; s.bufferSize = bufferSize;
+    s.sampleRate = requestRate; s.numInputChannels = captureChannels; s.numOutputChannels = 0; s.bufferSize = bufferSize;
     stream.setup(s);
-    int sr = (int)stream.getSampleRate();              // adopt the device's actual rate (e.g. 48000)
-    if (sr > 0) sampleRate = sr;
-    ofLogNotice() << "input: " << deviceName << " @ " << sampleRate << " Hz";
+    int sr = (int)stream.getSampleRate();              // adopt the device's actual rate
+    sampleRate = (sr > 0) ? sr : requestRate;
+    ofLogNotice() << "input: " << deviceName << " ch " << (activeChannelOffset + 1) << "-" << (activeChannelOffset + recChannels)
+                  << " of " << captureChannels << " @ " << sampleRate << " Hz";
+}
+
+// ROUTING tab's "REFRESH DEVICE LIST" button. getDeviceList() already re-queries CoreAudio/RtAudio
+// fresh on every call (buildFields() does this every time the settings dialog opens), but some
+// CoreAudio setups only actually re-probe the hardware graph once every stream holding it open is
+// released — plugging in an interface (e.g. a Zoom L-8) can otherwise stay invisible until the app
+// restarts. Closing + reopening the stream forces that rescan.
+void ofApp::refreshAudioDevices() {
+    stream.close();
+    buildFields();   // re-enumerates devices fresh into audioDeviceChoices
+    setupAudio();    // reopen — same saved device/channels if still present, else auto-detect
+}
+
+// Move the read window over the already-open stream — the stream captures the device's WHOLE channel
+// bus (see setupAudio), so switching which stereo pair the visualizer/recorder/broadcast hears needs
+// no stream re-open (instant, no audio glitch). Only a DEVICE change needs a re-open.
+void ofApp::applyChannelSelection() {
+    if (captureChannels <= 0) { activeChannelOffset = 0; recChannels = 2; return; }
+    int maxPair = std::max(0, (captureChannels - 1) / 2);
+    int pair = ofClamp(sInputChannelPair, 0, maxPair);
+    activeChannelOffset = std::min(pair * 2, std::max(0, captureChannels - 1));
+    recChannels = std::min(2, captureChannels - activeChannelOffset);
 }
 
 //--------------------------------------------------------------
 void ofApp::audioIn(ofSoundBuffer & input) {
     const size_t frames = input.getNumFrames(), ch = input.getNumChannels();
     if (ch == 0) return;
+    // Only read the selected channel(s) — the stream may carry the device's whole bus (see setupAudio),
+    // so a multi-channel interface's unused channels are simply ignored here.
+    size_t c0 = std::min((size_t)activeChannelOffset, ch - 1);
+    size_t c1 = std::min(c0 + (size_t)std::max(1, recChannels), ch);
     std::lock_guard<std::mutex> lock(mtx);
-    float sum = 0;
+    float sum = 0, bufPeak = 0;
     for (size_t i = 0; i < frames; i++) {
         float m = 0;
-        for (size_t c = 0; c < ch; c++) {
+        for (size_t c = c0; c < c1; c++) {
             float smp = input.getSample(i, c);
             m += smp;
-            if (recording) recAudio.push_back((short)(ofClamp(smp, -1.f, 1.f) * 32767));
+            if (recording || broadcasting) {
+                short s16 = (short)(ofClamp(smp, -1.f, 1.f) * 32767);
+                if (recording)    recAudio.push_back(s16);
+                if (broadcasting) broadcastAudioQueue.push_back(s16);
+            }
         }
-        m /= (float)ch;
+        m /= (float)(c1 - c0);
         ringBuf[writePos] = m; writePos = (writePos + 1) % N;
         sum += m * m;
+        bufPeak = std::max(bufPeak, fabsf(m));
     }
     rms = sqrtf(sum / (float)frames);
+    // Peak-hold with slow decay so a transient briefly holds then falls back — a musical VU-style peak.
+    peak = std::max(bufPeak, peak * 0.92f);
 }
 
 //--------------------------------------------------------------
@@ -488,6 +679,42 @@ void ofApp::update() {
     if (autoRecTest && !didRecTest) {
         if (!recording && t > 1.5f) startRecording();
         else if (recording && t > 5.5f) { stopRecording(); didRecTest = true; autoRecTest = false; }
+    }
+
+    // BROADCAST — drain audioIn()'s queue into the live icecast pipe here (main thread), never on the
+    // audio callback thread: ffmpeg/network can stall or die without ever blocking real-time audio capture.
+    if (broadcasting && icePipe) {
+        std::vector<short> chunk;
+        { std::lock_guard<std::mutex> lock(mtx); chunk.swap(broadcastAudioQueue); }
+        if (!chunk.empty() && fwrite(chunk.data(), sizeof(short), chunk.size(), icePipe) < chunk.size()) {
+            ofLogError() << "BROADCAST: ffmpeg pipe write failed (connection dropped?) — stopping";
+            stopBroadcast();
+        }
+    }
+    if (broadcasting && (t - lastSnapshotT) > SNAPSHOT_INTERVAL) { pushSnapshot(); lastSnapshotT = t; }
+    if (broadcasting && (t - lastStreamTsT) > 1.0f) { pushStreamTimestamp(); lastStreamTsT = t; }
+
+    // Non-blocking registration verify (fired in setup): poll for the /whoami result file.
+    if (regVerifyPending) {
+        std::string outFile = gsScratch("hg_whoami.json");
+        if (ofFile::doesFileExist(outFile)) {
+            std::ifstream in(outFile); std::string s((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (!s.empty()) {
+                regVerifyPending = false;
+                ofJson r; try { r = ofJson::parse(s); } catch (...) {}
+                if (!r.is_null() && r.contains("registered")) {
+                    if (r.value("registered", false)) {
+                        sArtist = r.value("artist", sArtist);   // server is authoritative on the display name
+                        sRegistered = true; regStatus = "Registered as " + sArtist;
+                    } else {
+                        sRegistered = false;
+                        regStatus = "Not registered on this server \xE2\x80\x94 enter an invite code to register.";
+                    }
+                }
+                ofFile::removeFile(outFile);
+            }
+        }
+        if (t - regVerifyT > 10.0f) regVerifyPending = false;   // gave up (offline) — keep the locally-saved state
     }
 }
 
@@ -882,6 +1109,38 @@ void ofApp::draw() {
         ofPopMatrix();
     }
 
+    // ON AIR indicator — live only (not captured), stacks below REC when both are active at once
+    if (broadcasting) {
+        ofPushMatrix();
+        ofTranslate(r.x, r.y); ofScale(r.width / (float)RW, r.height / (float)RH);
+        float ry = fm - 16 * S + (recording ? 26 * S : 0), bl = 0.5f + 0.5f * sinf(t * 4.0f);
+        auto pd = [](int v){ return (v < 10 ? "0" : "") + ofToString(v); };
+        ofSetColor(255, 190, 70, (int)(120 + 135 * bl)); ofDrawCircle(fm + 6 * S, ry - 5 * S, 6 * S);   // amber — distinct from REC's red
+        int secs = (int)(t - broadcastStart);
+        ofSetColor(231, 237, 232);
+        std::string srv = sRegServer;                                    // show the server host next to ON AIR
+        { size_t sc = srv.find("://"); if (sc != std::string::npos) srv = srv.substr(sc + 3);
+          size_t sl = srv.find('/'); if (sl != std::string::npos) srv = srv.substr(0, sl); }
+        std::string label = (srv.empty() ? "" : srv + "  \xC2\xB7  ") + "ON AIR  " + pd(secs / 60) + ":" + pd(secs % 60);
+        fValue.drawString(label, fm + 22 * S, ry);
+        ofPopMatrix();
+    }
+
+    // Audio level meter — 'V'. SCREEN ONLY (drawn after the FBO like the panels), so it sits in the bottom
+    // margin OUTSIDE the recorded/broadcast frame and never appears in the video. A quick performance monitor.
+    if (showMeter) {
+        ofPushMatrix();
+        ofTranslate(r.x, r.y); ofScale(r.width / (float)RW, r.height / (float)RH);
+        float mw = RW * 0.5f, mh = 10 * S, mx = (RW - mw) * 0.5f, my = RH - fm * 0.5f - mh * 0.5f;
+        ofSetColor(150, 156, 154); fUI.drawString("SIGNAL", mx, my - 8 * S);
+        ofSetColor(30, 34, 36); ofDrawRectangle(mx, my, mw, mh);           // track
+        float lvl = ofClamp(level, 0.0f, 1.0f);
+        ofSetColor(lvl > 0.02f ? cNeon : ofColor(70, 76, 74));
+        if (lvl > 0.001f) ofDrawRectangle(mx, my, mw * lvl, mh);           // fill
+        ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(92, 100, 96); ofDrawRectangle(mx, my, mw, mh); ofFill();
+        ofPopMatrix();
+    }
+
     // "file exists" overwrite warning (window-only; recording hasn't started)
     if (recWarn) {
         float bl = 0.5f + 0.5f * sinf(t * 5.0f);
@@ -931,12 +1190,16 @@ void ofApp::drawHud() {
     float yTop = m + fTitle.getAscenderHeight() + 8 * S;
     float lx = m + ins;
 
-    // SIGNAL — NONE (no audio · dim, static) overrules · AUDITION (audio, grey, static) · LIVE (audio+recording, white, pulsing) — top-left
+    // All the SIGNAL + session-metadata text below is gated on showMeta ('T', default OFF): the frame
+    // that gets recorded AND pushed to the client stays a clean visualizer, and HGReceptorMk1 renders
+    // the telemetry itself from the metadata heliograph sends. Only the corner ticks above are always drawn.
+    if (showMeta) {
+    // SIGNAL — NONE (no audio · dim, static) overrules · AUDITION (audio, grey, static) · LIVE (audio+recording/broadcasting, white, pulsing) — top-left
     {
         float gap = 24 * S;
         bool audio = level > 0.008f;                          // is any audio actually coming in?
-        bool live  = audio && recording;                      // NONE overrules: no audio => NONE even while recording
-        const char* st = !audio ? "NONE" : (recording ? "LIVE" : "AUDITION");
+        bool live  = audio && (recording || broadcasting);    // NONE overrules: no audio => NONE even while recording/broadcasting
+        const char* st = !audio ? "NONE" : (live ? "LIVE" : "AUDITION");
         ofColor stateCol = !audio ? ofColor(96, 100, 98) : (live ? ofColor(240, 244, 241) : ofColor(140, 146, 143));
         ofSetColor(238, 242, 239); fValue.drawString("SIGNAL", lx, yTop);
         float wS = fValue.stringWidth("SIGNAL");
@@ -949,8 +1212,7 @@ void ofApp::drawHud() {
     {
         std::string s = ofToUpper(sChannel) + " Nº " + pad(sTransmission, 3);   // Channel + Episode (both user-set)
         ofSetColor(val); fTitle.drawString(s, W - m - ins - fTitle.stringWidth(s), yTop);
-        std::string mv = (sMovement == 0) ? "FREEFORM" : (sMovement == 1) ? "COMPOSED" : (sMovementText.empty() ? "OTHER" : ofToUpper(sMovementText));
-        std::string meta = ofToUpper(sArtist) + "   ·   " + sDate + "   ·   " + mv;
+        std::string meta = ofToUpper(sArtist) + "   ·   " + sDate;
         ofSetColor(lab); fValue.drawString(meta, W - m - ins - fValue.stringWidth(meta), yTop + 32 * S);
     }
 
@@ -1006,6 +1268,7 @@ void ofApp::drawHud() {
         ofNoFill(); ofSetLineWidth(1.6f * S); ofDrawCircle(oCx, oCy, oR);        // ☉ ring
         ofFill(); ofDrawCircle(oCx, oCy, oR * 0.20f);                           // ☉ centre dot
     }
+    }   // end if (showMeta)
 
     ofSetLineWidth(1.0f);
 }
@@ -1282,6 +1545,7 @@ void ofApp::drawPanels() {
 //  In-app SETTINGS editor — edit session content live (no JSON editing)
 //--------------------------------------------------------------
 std::string ofApp::fieldText(const Field& f) {
+    if (f.header) return "";                                   // section divider — no value to show
     if (f.folder && f.sp) {                                    // show the resolved target folder (no disk side-effects)
         if (f.sp->empty()) return "(default)  " + gsVideosDir() + "HelioRecordings";
         std::string p = *f.sp; if (!p.empty() && p.back() == '/') p.pop_back();
@@ -1297,6 +1561,7 @@ std::string ofApp::fieldText(const Field& f) {
     return ofToString(*f.fp, 1);
 }
 void ofApp::commitField(Field& f) {
+    if (f.header) return;                                      // section divider — nothing to commit
     if (f.op && !f.choices.empty() && f.ip && *f.ip == (int)f.choices.size() - 1) *f.op = f.buf;   // editing the OTHER free-text
     else if (f.sp) *f.sp = f.buf;
     else if (f.ip) *f.ip = ofToInt(f.buf);
@@ -1304,22 +1569,96 @@ void ofApp::commitField(Field& f) {
 }
 void ofApp::buildFields() {
     fields.clear();
-    auto addS = [&](std::string l, std::string* p){ Field f; f.label = l; f.sp = p; fields.push_back(f); };
-    auto addI = [&](std::string l, int* p){ Field f; f.label = l; f.ip = p; fields.push_back(f); };
-    auto addC = [&](std::string l, int* p, std::vector<std::string> c, std::string* op){ Field f; f.label = l; f.ip = p; f.choices = c; f.op = op; fields.push_back(f); };
-    auto addF = [&](std::string l, std::string* p){ Field f; f.label = l; f.sp = p; f.folder = true; fields.push_back(f); };
-    addS("Channel",          &sChannel);       // the big title word, top-right (e.g. TRANSMISSION)
+    // Each add* helper tags the field with curTab, so drawSettings()/mousePressed() can show only
+    // the active tab's fields — this is what keeps the dialog's height bounded regardless of how
+    // many total settings exist across SESSION/ROUTING/BROADCAST (see drawSettings()).
+    int curTab = 0;   // 0 SESSION · 1 ROUTING · 2 BROADCAST — bumped below as each section starts
+    auto addS = [&](std::string l, std::string* p){ Field f; f.label = l; f.sp = p; f.tab = curTab; fields.push_back(f); };
+    auto addI = [&](std::string l, int* p){ Field f; f.label = l; f.ip = p; f.tab = curTab; fields.push_back(f); };
+    auto addC = [&](std::string l, int* p, std::vector<std::string> c, std::string* op){ Field f; f.label = l; f.ip = p; f.choices = c; f.op = op; f.tab = curTab; fields.push_back(f); };
+    auto addF = [&](std::string l, std::string* p){ Field f; f.label = l; f.sp = p; f.folder = true; f.tab = curTab; fields.push_back(f); };
+    auto addSecret = [&](std::string l, std::string* p){ Field f; f.label = l; f.sp = p; f.secret = true; f.tab = curTab; fields.push_back(f); };
+    // SESSION = branding for THIS broadcast/show — the parts that change episode to episode.
+    // (Channel-wide branding — channel name, artist, font, colours — lives on the CHANNEL tab.)
     addI("Episode",          &sTransmission);  // the number after the channel
     addS("Artifact Title",   &sArtifact);      // filename brand (e.g. HelioGraph)
     addS("Series Shorthand", &sShorthand);     // filename code (e.g. TxN)
-    addS("Artist",           &sArtist);
     addS("Title",            &sTitle);         // shows bottom-left while recording
     addS("Note",             &sNote);          // shows bottom-left while recording
-    addC("Movement", &sMovement, {"FREEFORM", "COMPOSED", "OTHER"}, &sMovementText);   // click to cycle; OTHER = free text
-    addF("Recordings", &sRecDir);    // folder where recordings are saved — click opens a folder picker
+    addF("Recordings", &sRecDir);    // folder where recordings are saved — click opens a folder picker (local only)
     // Waypoint / Heading / Distance are not editable — they're auto-generated telemetry.
+
+    // ---- ROUTING: pick the audio input device + which channel pair to listen to ----
+    // Rebuilt every time this dialog opens (see the 'E' key handler) so a freshly plugged-in
+    // interface (e.g. a Zoom L-8) shows up without restarting the app.
+    curTab = 1;
+    audioDeviceChoices = { "Auto" };
+    auto devices = stream.getDeviceList();
+    for (auto& d : devices) if (d.inputChannels > 0) audioDeviceChoices.push_back(d.name);
+    sInputDeviceIdx = 0;
+    for (size_t i = 1; i < audioDeviceChoices.size(); i++)
+        if (audioDeviceChoices[i] == sInputDevice) { sInputDeviceIdx = (int)i; break; }
+    addC("Input Device", &sInputDeviceIdx, audioDeviceChoices, nullptr);
+
+    // Channel-pair choices reflect whichever device is currently selected (or, for "Auto",
+    // whatever's actively streaming right now) — not a device the artist has merely highlighted
+    // but not saved yet.
+    int chForPairs = captureChannels > 0 ? captureChannels : 2;
+    if (sInputDeviceIdx > 0)
+        for (auto& d : devices) if (d.name == audioDeviceChoices[sInputDeviceIdx]) { chForPairs = std::max(1, (int)d.inputChannels); break; }
+    std::vector<std::string> chChoices;
+    for (int p = 0; p * 2 < chForPairs; p++) chChoices.push_back(ofToString(p * 2 + 1) + "-" + ofToString(std::min(p * 2 + 2, chForPairs)));
+    if (chChoices.empty()) chChoices.push_back("1-2");
+    sInputChannelPair = ofClamp(sInputChannelPair, 0, (int)chChoices.size() - 1);
+    addC("Channels", &sInputChannelPair, chChoices, nullptr);
+    sInputChannelPairAtOpen = sInputChannelPair;   // snapshot — writeSession() diffs against this to know whether to hot-swap the stream
+
+    // ---- REGISTER: get an artist account on the server with an invite code. The server hands back the
+    // broadcast config (mount/password/snapshot URL) — the artist never types raw hosts. Click REGISTER
+    // (drawn below the fields in drawSettings); then 'B' broadcasts to your own channel.
+    curTab = 2;
+    addS("Registration Server", &sRegServer);   // e.g. https://radio.stackmate.org
+    addS("Invite Code",         &sInviteCode);  // single-use code from the station admin (consumed on register)
+    addS("Artist Name",         &sArtist);      // your channel's display name (same field as CHANNEL → Artist)
+
+    // ---- CHANNEL: channel-wide branding (the basics) — channel name + artist + the client's UI font +
+    // accent colour. These ride in the shared snapshot metadata, so SAVE re-themes your live channel on
+    // the listener client within one snapshot (~15s while broadcasting). Font preview drawn below.
+    curTab = 3;
+    addS("Channel Name", &sChannel);   // the big title word on the client (e.g. TRANSMISSION)
+    addS("Artist",       &sArtist);    // your name on the client (same field as REGISTER → Artist Name)
+    { std::vector<std::string> fl(kFontLabels, kFontLabels + kNumFonts);
+      addC("Font", &sFontIdx, fl, nullptr); }   // client UI font — click to cycle; preview below
+    addS("Accent", &sAccent);          // client accent colour, hex (e.g. #ff3b30) — swatch shown beside it
+    // Donations — a bc1 Bitcoin and/or lq1 Liquid address. Only broadcast once the wallet is confirmed
+    // backed up (the client shows them in a room behind a "verify with the artist" gate).
+    { Field h; h.header = true; h.label = "Donations"; h.tab = curTab; fields.push_back(h); }
+    addC("Wallet Backed Up", &sWalletBackedUp, {"NO", "YES"}, nullptr);   // MUST be YES before the address fields unlock
+    addS("Lightning Address", &sLnAddress);   // user@domain (highest preference)
+    addS("Bitcoin Address",   &sBtcAddress);  // bc1…
+    addS("Liquid Address",    &sLqAddress);    // lq1…
+    // Protection: the address fields are greyed out + read-only until the artist confirms the wallet is
+    // backed up — you can't add a donation address for a wallet you might not control/recover.
+    for (auto& f : fields) if (f.sp == &sLnAddress || f.sp == &sBtcAddress || f.sp == &sLqAddress) f.gateBackup = true;
+
+    // Once registered, the artist name IS the channel identity (it hashes to the channel id) — lock every
+    // artist-name field so it can't be changed. Pure local-recording users (not registered) stay editable.
+    for (auto& f : fields) if (f.sp == &sArtist) f.locked = sRegistered;
 }
 void ofApp::writeSession() {
+    // ROUTING: translate the UI index back to a persisted device name ("" = Auto), then hot-swap
+    // the live audio stream if the artist actually changed device/channel selection this session —
+    // avoids restarting audio on every save when only, say, the Artist field changed.
+    std::string newDevice = (sInputDeviceIdx <= 0 || sInputDeviceIdx >= (int)audioDeviceChoices.size())
+                             ? "" : audioDeviceChoices[sInputDeviceIdx];
+    bool routingChanged = (newDevice != sInputDevice) || (sInputChannelPair != sInputChannelPairAtOpen);
+    sInputDevice = newDevice;
+    if (routingChanged) {
+        stream.close();
+        setupAudio();
+        sInputChannelPairAtOpen = sInputChannelPair;
+    }
+
     ofJson j;
     { std::ifstream in(gsSessionPath());   // keep any _help block
       if (in) { try { in >> j; } catch (...) {} } }
@@ -1329,16 +1668,30 @@ void ofApp::writeSession() {
     j["artist"]  = sArtist;
     j["channel"] = sChannel;
     j["note"]    = sNote;
-    j["movement"] = sMovement;
-    j["movementText"] = sMovementText;
+    j["font"]    = kFontKeys[(int)ofClamp(sFontIdx, 0, kNumFonts - 1)];   // CHANNEL branding
+    j["accent"]  = sAccent;
+    j["donations"]["ln"]  = sLnAddress;  j["donations"]["btc"] = sBtcAddress;
+    j["donations"]["lq"]  = sLqAddress;  j["donations"]["backedUp"] = sWalletBackedUp;
     j["artifact"]  = sArtifact;
     j["shorthand"] = sShorthand;
     j["recDir"]    = sRecDir;
+    j["inputDevice"]      = sInputDevice;
+    j["inputChannelPair"] = sInputChannelPair;
+    j["broadcast"]["iceHost"]       = sIceHost;
+    j["broadcast"]["icePort"]       = sIcePort;
+    j["broadcast"]["iceMount"]      = sIceMount;
+    j["broadcast"]["icePassword"]   = sIcePassword;
+    j["broadcast"]["snapshotUrl"]   = sSnapshotUrl;
+    j["broadcast"]["snapshotToken"] = sSnapshotToken;
+    j["registration"]["server"]     = sRegServer;
+    j["registration"]["channelId"]  = sChannelId;
+    j["registration"]["registered"] = sRegistered;
     j["coordinates"]["waypoint"] = sWaypoint;
     j["coordinates"]["heading"]  = sHeading;
     j["coordinates"]["distance"] = sDist;
     std::ofstream o(gsSessionPath());
     if (o) { o << j.dump(2); o.close(); saveFlash = t; ofLogNotice() << "session.json saved"; }
+    if (broadcasting) lastSnapshotT = -100;   // SAVE → push a fresh snapshot NOW so config changes (incl. cleared donation addresses when Wallet Backed Up flips to NO) reach the client immediately
     else   { ofLogError() << "session.json: could not open for writing"; }
 }
 
@@ -1404,33 +1757,173 @@ void ofApp::deletePresetFile(const std::string& name) {
 }
 void ofApp::drawSettings() {
     ofSetColor(0, 0, 0, 185); ofDrawRectangle(0, 0, RW, RH);          // dim everything
-    float pw = 1200 * S, ph = ((float)fields.size() * 64 + 230) * S;   // +30 for the Title/Note info line's own row
+    // Dialog height is bounded by the ACTIVE tab's field count only, not the total across all three —
+    // otherwise SESSION+ROUTING+BROADCAST combined would be taller than the frame itself (RH).
+    // Row height is computed by ONE function, used both to size the dialog (here, before py is even
+    // known) and to lay out fields while drawing (below) — so they can never drift out of sync again.
+    // This dialog has already overlapped its own footer twice from a hand-tuned constant that wasn't
+    // updated when a new row's height changed (once for the tab bar, once for the Channels signal
+    // meter) — a shared source of truth removes that whole bug class instead of re-guessing a number.
+    auto rowHeight = [](const Field& f) -> float {
+        if (f.header) return 14 + 44;
+        float extra = 0;
+        if (f.label == "Note") extra = 30;           // Title/Note info line
+        if (f.label == "Channels") extra = 34;       // live signal meter
+        return 64 + extra;
+    };
+    float contentH = 0;
+    for (auto& f : fields) if (f.tab == settingsTab) contentH += rowHeight(f);
+    if (settingsTab == 1) contentH += 64;    // ROUTING draws a REFRESH DEVICE LIST button below the fields (must be counted here or it collides with the footer)
+    if (settingsTab == 2) contentH += 104;   // REGISTER draws a button + status line + subline below the fields (same footer-overlap trap)
+    if (settingsTab == 3) contentH += 148;   // CHANNEL draws a font PREVIEW box + hint + donations note below the fields (footer-overlap trap)
+    float FY_START = 158, FOOTER_RESERVE = 126;   // FY_START must match tby+tbh+46 below; footer = gap + RECORDING/SAVE/hint block
+    float pw = 1200 * S, ph = (FY_START + contentH + FOOTER_RESERVE) * S;
     float px = (RW - pw) * 0.5f, py = (RH - ph) * 0.5f;
     ofSetColor(12, 14, 16, 248); ofDrawRectangle(px, py, pw, ph);
-    ofSetColor(210, 216, 212); fKick.drawString("SESSION SETTINGS", px + 40 * S, py + 56 * S);
-    float fy = py + 124 * S;
+    ofSetColor(210, 216, 212); fKick.drawString("SETTINGS", px + 40 * S, py + 56 * S);
+
+    // tab bar — SESSION / ROUTING / REGISTER / CHANNEL (same chip styling as the right panel's GRAPH/AUDIO/MOD)
+    const char* tabNames[4] = { "SESSION", "ROUTING", "REGISTER", "CHANNEL" };
+    float tby = py + 78 * S, tbh = 34 * S, tbg = 8 * S, tbw = (pw - 80 * S - 3 * tbg) / 4.0f;
+    for (int i = 0; i < 4; i++) {
+        settingsTabBox[i] = ofRectangle(px + 40 * S + i * (tbw + tbg), tby, tbw, tbh);
+        bool hot = (settingsTab == i);
+        ofSetColor(hot ? ofColor(58, 70, 64) : ofColor(34, 38, 42)); ofDrawRectangle(settingsTabBox[i]);
+        ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(hot ? ofColor(206, 212, 208) : ofColor(92, 100, 96)); ofDrawRectangle(settingsTabBox[i]); ofFill();
+        ofSetColor(hot ? ofColor(236, 240, 237) : ofColor(186, 194, 190));
+        ofRectangle bb = fUI.getStringBoundingBox(tabNames[i], 0, 0);
+        fUI.drawString(tabNames[i], floorf(settingsTabBox[i].x + (settingsTabBox[i].width - bb.width) * 0.5f - bb.x), floorf(settingsTabBox[i].y + (settingsTabBox[i].height - bb.height) * 0.5f - bb.y));
+    }
+
+    float fy = tby + tbh + 46 * S;
     for (size_t i = 0; i < fields.size(); i++) {
         Field& f = fields[i];
+        if (f.tab != settingsTab) continue;                           // only the active tab's fields occupy layout space
+        if (f.header) {                                               // section divider — no control, just a label
+            fy += 14 * S;
+            ofSetColor(64, 70, 68); ofDrawLine(px + 40 * S, fy - 20 * S, px + pw - 40 * S, fy - 20 * S);
+            ofSetColor(190, 196, 192); fLabel.drawString(ofToUpper(f.label), px + 40 * S, fy);
+            fy += 44 * S;
+            continue;
+        }
+        bool gateOff = f.gateBackup && !sWalletBackedUp;                 // donation field, wallet not yet confirmed backed up
+        bool inert   = f.locked || gateOff;                              // read-only + greyed
         f.box = ofRectangle(px + 320 * S, fy - 30 * S, pw - 360 * S, 44 * S);
-        ofSetColor(150, 160, 156); fLabel.drawString(ofToUpper(f.label), px + 40 * S, fy - 2 * S);
+        ofSetColor(inert ? ofColor(80, 84, 88) : ofColor(150, 160, 156)); fLabel.drawString(ofToUpper(f.label), px + 40 * S, fy - 2 * S);
         bool foc = ((int)i == editingField);
-        ofSetColor(foc ? ofColor(44, 48, 52) : ofColor(26, 30, 32)); ofDrawRectangle(f.box);   // grey focus highlight (no green)
-        std::string txt = foc ? f.buf : fieldText(f);
-        ofSetColor(220, 226, 222); fValue.drawString(txt, f.box.x + 14 * S, fy);
+        ofSetColor(inert ? ofColor(20, 22, 24) : (foc ? ofColor(44, 48, 52) : ofColor(26, 30, 32))); ofDrawRectangle(f.box);   // inert fields sit darker/greyed (grey focus highlight otherwise, no green)
+        // secret fields (Icecast/snapshot credentials): mask at rest so a glance at the screen or a
+        // screen-share doesn't leak them — but fieldText() itself stays unmasked (mousePressed uses it
+        // to seed f.buf when you click in to edit; masking there would let "********" overwrite the real value).
+        bool isBech = (f.label == "Bitcoin Address" || f.label == "Liquid Address");   // bc1/lq1 → shown 4-char grouped
+        std::string txt = foc ? f.buf
+                        : (f.secret ? (f.sp && !f.sp->empty() ? "********" : "(not set)")
+                        : (isBech && f.sp && !f.sp->empty() ? gsGroup4(*f.sp) : fieldText(f)));
+        ofSetColor(inert ? ofColor(90, 94, 96) : ofColor(220, 226, 222)); fValue.drawString(gateOff ? "" : txt, f.box.x + 14 * S, fy);
+        if (f.locked)  { ofSetColor(120, 126, 124); std::string h = "[locked while registered]"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
+        if (gateOff)   { ofSetColor(120, 126, 124); std::string h = "set Wallet Backed Up = YES to enter"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (!f.choices.empty()) { ofSetColor(120, 126, 124); std::string h = "click to toggle"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
+        // Address validity — a small green/red dot at the field's right edge (green = will be broadcast).
+        if (f.sp && !f.sp->empty() && (isBech || f.label == "Lightning Address")) {
+            bool v = (f.label == "Lightning Address") ? gsValidLightning(*f.sp) : gsValidAddr(*f.sp);
+            ofSetColor(v ? ofColor(120, 200, 150) : ofColor(212, 120, 110)); ofDrawCircle(f.box.getMaxX() - 12 * S, fy - 8 * S, 4 * S);
+        }
         if (f.folder)           { ofSetColor(120, 126, 124); std::string h = "click to choose folder"; fUI.drawString(h, f.box.x + f.box.width - 16 * S - fUI.stringWidth(h), fy - 2 * S); }
         if (foc && fmodf(t, 1.0f) < 0.55f) {                          // blinking cursor
             float cx = f.box.x + 16 * S + fValue.stringWidth(f.buf);
             ofSetColor(cNeon); ofDrawRectangle(cx, fy - 20 * S, 2 * S, 26 * S);
         }
-        if (f.label == "Note") { ofSetColor(112, 118, 116); std::string in = "Title & Note appear in the bottom-left of your live recording"; fUI.drawString(in, f.box.getMaxX() - fUI.stringWidth(in), fy + 32 * S); fy += 30 * S; }   // info line (right-aligned to the field edge)
-        fy += 64 * S;
+        if (f.label == "Note") { ofSetColor(112, 118, 116); std::string in = "Title & Note appear in the bottom-left of your live recording"; fUI.drawString(in, f.box.getMaxX() - fUI.stringWidth(in), fy + 32 * S); }   // info line (right-aligned to the field edge)
+        if (f.label == "Channels") {   // live signal meter — reflects the input being auditioned RIGHT NOW
+                                       // (device/channel clicks apply live, see mousePressed). Driven by
+                                       // `level`, the same smoothed RMS the visualizer/HUD use, so it goes
+                                       // quiet exactly when audioIn() isn't receiving signal on this pair —
+                                       // cycle Channels and watch for the meter to jump to find your source.
+            float mx = f.box.x, my = fy + 18 * S, mw = f.box.width, mh = 12 * S;
+            ofSetColor(120, 126, 124); fUI.drawString("SIGNAL", px + 40 * S, my + 9 * S);
+            ofSetColor(30, 34, 36); ofDrawRectangle(mx, my, mw, mh);   // meter track
+            float lvl = ofClamp(level, 0.0f, 1.0f);
+            ofSetColor(lvl > 0.02f ? cNeon : ofColor(70, 76, 74));     // bright once signal is present, dim while silent
+            if (lvl > 0.001f) ofDrawRectangle(mx, my, mw * lvl, mh);
+            ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(92, 100, 96); ofDrawRectangle(mx, my, mw, mh); ofFill();
+            ofSetColor(112, 118, 116);   // tip: this meter can also live on the home screen while performing
+            fUI.drawString("tip: press  V  to show this meter along the bottom of the screen (never recorded)", mx, my + mh + 20 * S);
+        }
+        fy += rowHeight(f) * S;
+    }
+    if (settingsTab == 1) {   // ROUTING — see refreshAudioDevices() for why this needs to close + reopen the stream
+        refreshDevicesBox = ofRectangle(px + 40 * S, fy + 10 * S, 300 * S, 44 * S);
+        ofSetColor(34, 38, 42); ofDrawRectangle(refreshDevicesBox);
+        ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(92, 100, 96); ofDrawRectangle(refreshDevicesBox); ofFill();
+        ofSetColor(206, 212, 208);
+        std::string rlabel = "REFRESH DEVICE LIST";
+        ofRectangle bb = fUI.getStringBoundingBox(rlabel, 0, 0);
+        fUI.drawString(rlabel, floorf(refreshDevicesBox.x + (refreshDevicesBox.width - bb.width) * 0.5f - bb.x), floorf(refreshDevicesBox.y + (refreshDevicesBox.height - bb.height) * 0.5f - bb.y));
+        ofSetColor(120, 126, 124);
+        std::string hint = "plugged something in? click to rescan";
+        fUI.drawString(hint, refreshDevicesBox.getMaxX() + 16 * S, refreshDevicesBox.y + 28 * S);
+    }
+    if (settingsTab == 2) {   // REGISTER — button that POSTs to the server + a status line
+        registerBox = ofRectangle(px + 40 * S, fy + 10 * S, 200 * S, 44 * S);
+        ofSetColor(sRegistered ? ofColor(40, 60, 46) : ofColor(34, 38, 42)); ofDrawRectangle(registerBox);
+        ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(sRegistered ? ofColor(140, 200, 160) : ofColor(92, 100, 96)); ofDrawRectangle(registerBox); ofFill();
+        ofSetColor(206, 212, 208);
+        std::string rlabel = sRegistered ? "RE-REGISTER" : "REGISTER";
+        ofRectangle bb = fUI.getStringBoundingBox(rlabel, 0, 0);
+        fUI.drawString(rlabel, floorf(registerBox.x + (registerBox.width - bb.width) * 0.5f - bb.x), floorf(registerBox.y + (registerBox.height - bb.height) * 0.5f - bb.y));
+        // status / result line (fades in on the last attempt, then stays)
+        if (!regStatus.empty()) {
+            bool fresh = (t - regFlash) < 4.0f;
+            ofSetColor(sRegistered ? ofColor(150, 210, 170) : ofColor(210, 150, 120), fresh ? 255 : 170);
+            fUI.drawString(regStatus, registerBox.getMaxX() + 18 * S, registerBox.y + 28 * S);
+        }
+        // current channel line
+        ofSetColor(120, 126, 124);
+        std::string sub = sRegistered ? ("broadcasting as " + sArtist + "  \xC2\xB7  " + sRegServer)
+                                      : "enter an invite code + artist name, then REGISTER to broadcast";
+        fUI.drawString(sub, px + 40 * S, registerBox.getMaxY() + 26 * S);
+    }
+    if (settingsTab == 3) {   // CHANNEL — live preview of the font + accent the listener client will use
+        int fi = ofClamp(sFontIdx, 0, kNumFonts - 1);
+        float bx = px + 40 * S, by = fy + 10 * S, bw = pw - 80 * S, bh = 64 * S;
+        ofSetColor(20, 23, 25); ofDrawRectangle(bx, by, bw, bh);   // preview panel
+        ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(70, 76, 74); ofDrawRectangle(bx, by, bw, bh); ofFill();
+        // Accent shown LIVE: while the Accent field is being edited, preview the in-progress buffer (not the
+        // committed value) so the colour tracks each keystroke; otherwise use the saved sAccent.
+        std::string accStr = sAccent;
+        if (editingField >= 0 && editingField < (int)fields.size() && fields[editingField].label == "Accent") accStr = fields[editingField].buf;
+        ofColor acc(255, 59, 48); bool accValid = false;
+        if (accStr.size() == 7 && accStr[0] == '#') {
+            try { acc = ofColor(std::stoi(accStr.substr(1, 2), nullptr, 16), std::stoi(accStr.substr(3, 2), nullptr, 16), std::stoi(accStr.substr(5, 2), nullptr, 16)); accValid = true; } catch (...) {}
+        }
+        // Mirror the client EXACTLY: channel name + episode are neutral; ONLY the "º" carries the accent.
+        // No colour block — the client shows no swatch. Drawn in the artist's chosen font.
+        ofColor ink(226, 232, 228);
+        std::string chan = (sChannel.empty() ? std::string("CHANNEL") : ofToUpper(sChannel)) + "  ";
+        std::string deg  = "\xC2\xBA";   // º only (U+00BA) — no "N"
+        std::string epi  = "  001";
+        float tx = bx + 24 * S, ty = by + bh * 0.5f + 8 * S;
+        // Normalized: translate to the shared baseline, scale this face to the common cap-height, draw at origin.
+        ofPushMatrix();
+        ofTranslate(tx, ty); ofScale(fPreviewScale[fi], fPreviewScale[fi]);
+        ofSetColor(ink); fPreview[fi].drawString(chan, 0, 0);
+        float x2 = fPreview[fi].stringWidth(chan);
+        ofSetColor(accValid ? acc : ink); fPreview[fi].drawString(deg, x2, 0);         // the º — accent
+        float x3 = x2 + fPreview[fi].stringWidth(deg);
+        ofSetColor(ink); fPreview[fi].drawString(epi, x3, 0);
+        ofPopMatrix();
+        ofSetColor(120, 126, 124);
+        std::string hint = "this is how your channel looks on the listener client \xC2\xB7 SAVE applies it to your live channel (~15s)";
+        fUI.drawString(hint, px + 40 * S, by + bh + 26 * S);
+        ofSetColor(150, 156, 154);
+        fUI.drawString("Donations broadcast only after Wallet Backed Up = YES \xC2\xB7 no wallet? set one up at wallet.bullbitcoin.com", px + 40 * S, by + bh + 50 * S);
     }
     bool saved = (t - saveFlash) < 1.6f;
     saveBox = ofRectangle(px + pw - 240 * S, py + ph - 72 * S, 200 * S, 46 * S);
     ofSetColor(saved ? ofColor(96, 102, 100) : ofColor(54, 60, 58)); ofDrawRectangle(saveBox);   // greyscale (no green)
     ofSetColor(cNeon); { std::string s = saved ? "SAVED" : "SAVE"; fValue.drawString(s, saveBox.x + saveBox.width * 0.5f - fValue.stringWidth(s) * 0.5f, saveBox.y + 31 * S); }
-    ofSetColor(150, 156, 154); fUI.drawString("RECORDING:   " + recBaseName() + ".mp4", px + 40 * S, py + ph - 104 * S);
+    if (settingsTab == 0)   // recording filename is a SESSION concern — don't repeat it under every tab
+        { ofSetColor(150, 156, 154); fUI.drawString("RECORDING:   " + recBaseName() + ".mp4", px + 40 * S, py + ph - 104 * S); }
     ofSetColor(120, 126, 124); fUI.drawString("click a field to edit   ·   [tab]/[enter] next   ·   [s]ave / [esc] close", px + 40 * S, py + ph - 40 * S);
 }
 
@@ -1440,17 +1933,20 @@ void ofApp::drawSettings() {
 void ofApp::drawHelp() {
     ofSetColor(0, 0, 0, 210); ofDrawRectangle(0, 0, RW, RH);
     static const std::pair<std::string, std::string> keys[] = {
-        {"G", "show / hide control panels"},
+        {"C", "show / hide control panels"},
         {"H", "show / hide this help"},
         {"I", "parameter help — hover any control"},
-        {"E", "edit session details"},
-        {"R", "start / stop recording"},
+        {"S", "settings (session / routing / register / channel)"},
+        {"R", "record — local capture only"},
+        {"B", "broadcast + record (needs a server login)"},
         {"M", "cycle mode (orbit / vehicle / platform)"},
         {"TAB", "toggle layout (radial / grid)"},
         {"X", "reset all settings to defaults"},
         {"U", "show / hide the broadcast HUD"},
+        {"T", "show / hide metadata + telemetry (default off)"},
+        {"V", "show / hide the audio level meter (screen only)"},
         {"F", "fullscreen"},
-        {"S", "save a screenshot to /tmp"},
+        {"P", "save a screenshot to /tmp"},
     };
     int n = sizeof(keys) / sizeof(keys[0]);
     float pw = 900 * S, ph = (n * 52 + 168) * S, px = (RW - pw) * 0.5f, py = (RH - ph) * 0.5f;
@@ -1673,6 +2169,197 @@ void ofApp::stopRecording() {
 }
 
 //--------------------------------------------------------------
+//  BROADCAST — live Icecast forwarding (audio) + periodic snapshot push (visual), independent of local
+//  recording. Config lives in the settings editor's BROADCAST section (see buildFields/writeSession).
+//--------------------------------------------------------------
+void ofApp::startBroadcast() {
+    if (broadcasting) return;
+    if (!sRegistered || sIceMount.empty() || sIcePassword.empty()) {
+        // gate broadcasting behind a real registration — surface it to the artist, don't fail silently
+        errMsg = "You need an account on this server to broadcast \xE2\x80\x94 register in S \xE2\x86\x92 REGISTER"; errFlash = t;
+        ofLogError() << "BROADCAST: not registered — register (E -> REGISTER) with an invite code first";
+        return;
+    }
+    { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
+    std::string port  = sIcePort.empty()  ? "8000"     : sIcePort;
+    std::string mount = sIceMount.empty() ? "live.mp3" : sIceMount;
+    std::string url = "icecast://source:" + sIcePassword + "@" + sIceHost + ":" + port + "/" + mount;
+    std::string log = gsScratch("gs_broadcast.log");
+    // 320 kbps CBR MP3 (the MP3 ceiling — effectively transparent) via LAME at the source's native rate
+    // + 16-bit. MP3 is deliberate: universal browser <audio> playback (incl. Safari/iOS) AND the ICY
+    // timestamp that drives the accurate audio-lag readout. (Lossless FLAC was tried; reverted — the
+    // Ogg trade-offs weren't worth it over near-transparent 320 MP3.)
+    std::string cmd = gsFFmpeg() + " -y -f s16le -ar " + ofToString(sampleRate) + " -ac " + ofToString(std::max(1, recChannels)) +
+        " -i - -c:a libmp3lame -b:a 320k -f mp3 -content_type audio/mpeg " + gsShQuote(url) + " >>" + gsShQuote(log) + " 2>&1";
+    icePipe = GS_POPEN(cmd.c_str(), GS_PIPEMODE);
+    if (!icePipe) { ofLogError() << "BROADCAST: failed to launch ffmpeg"; return; }
+    broadcasting = true;
+    broadcastStart = t;
+    lastSnapshotT = -100;   // push a snapshot on the very next update() tick
+    // B is B AND R: broadcasting always records a local copy too. If a manual recording is already
+    // running we leave it; otherwise we start one and remember to stop it when broadcasting ends.
+    if (!recording) { startRecording(); recStartedByBroadcast = true; }
+    ofLogNotice() << "BROADCAST start -> " << sIceHost << ":" << port << "/" << mount;
+}
+
+void ofApp::stopBroadcast() {
+    if (!broadcasting) return;
+    broadcasting = false;
+    if (icePipe) { GS_PCLOSE(icePipe); icePipe = nullptr; }
+    { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
+    // If broadcasting started the recording (not the artist via R), stop it too.
+    if (recStartedByBroadcast && recording) stopRecording();
+    recStartedByBroadcast = false;
+    ofLogNotice() << "BROADCAST stop";
+}
+
+// On startup, confirm we're still registered server-side (the server could have been reset). NON-BLOCKING:
+// fire a detached curl to /whoami that writes to a scratch file; update() polls the file so launch never
+// stalls on the network. If unreachable, we keep the locally-saved registration.
+void ofApp::verifyRegistration() {
+    if (!sRegistered || sChannelId.empty()) return;
+    std::string server = sRegServer;
+    while (!server.empty() && server.back() == '/') server.pop_back();
+    if (server.empty()) return;
+    std::string outFile = gsScratch("hg_whoami.json");
+    ofFile::removeFile(outFile);
+    std::string cmd = "curl -s -m 8 " + gsShQuote(server + "/whoami?channelId=" + sChannelId) +
+                      " -o " + gsShQuote(outFile) + " 2>/dev/null &";
+    system(cmd.c_str());
+    regVerifyPending = true; regVerifyT = t;
+}
+
+// Register this artist with the server: POST {inviteCode, artist} to <sRegServer>/register. On success
+// the server hands back the full broadcast config (icecast host/port/mount, shared source password,
+// per-channel snapshot URL) which we save — so the artist never touches raw hosts, and the single-use
+// invite is consumed. Errors (bad code, name taken, unreachable) are surfaced in regStatus.
+void ofApp::registerArtist() {
+    std::string server = sRegServer;
+    while (!server.empty() && server.back() == '/') server.pop_back();
+    if (server.empty())      { regStatus = "Enter the registration server URL."; regFlash = t; return; }
+    if (sInviteCode.empty()) { regStatus = "Enter your invite code."; regFlash = t; return; }
+    if (sArtist.empty())     { regStatus = "Enter your artist name."; regFlash = t; return; }
+
+    ofJson body; body["inviteCode"] = sInviteCode; body["artist"] = sArtist;
+    std::string bodyFile = gsScratch("hg_register_body.json");
+    { std::ofstream o(bodyFile); o << body.dump(); }
+    // -w prints the HTTP status as a trailing line after the response body, so we can read both from popen.
+    std::string cmd = "curl -s -m 15 -w " + gsShQuote("\n%{http_code}") +
+        " -X POST -H " + gsShQuote("Content-Type: application/json") +
+        " --data-binary @" + gsShQuote(bodyFile) + " " + gsShQuote(server + "/register") + " 2>/dev/null";
+    std::string out;
+    if (FILE* p = GS_POPEN(cmd.c_str(), "r")) {
+        char buf[4096]; size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);
+        GS_PCLOSE(p);
+    }
+    ofFile::removeFile(bodyFile);
+
+    std::string httpCode, respBody = out;
+    size_t nl = out.find_last_of('\n');
+    if (nl != std::string::npos) { httpCode = out.substr(nl + 1); respBody = out.substr(0, nl); }
+    while (!httpCode.empty() && !isdigit((unsigned char)httpCode.back())) httpCode.pop_back();
+
+    regFlash = t;
+    if (httpCode.empty()) { regStatus = "Could not reach " + server + " — check the URL and your connection."; sRegistered = false; return; }
+
+    ofJson resp;
+    try { resp = ofJson::parse(respBody); } catch (...) {}
+
+    if (httpCode == "200" && resp.value("ok", false)) {
+        sChannelId     = resp.value("channelId", std::string(""));
+        ofJson ice     = resp.contains("icecast") ? resp["icecast"] : ofJson::object();
+        sIceHost       = ice.value("host", server);
+        sIcePort       = ofToString(ice.value("port", 8000));
+        sIceMount      = ice.value("mount", sChannelId);
+        sIcePassword   = ice.value("password", std::string(""));
+        sSnapshotUrl   = resp.value("snapshotUrl", std::string(""));
+        sSnapshotToken = resp.value("snapshotToken", std::string(""));
+        sRegistered    = true;
+        sInviteCode    = "";   // single-use — consumed
+        regStatus = "Registered as " + sArtist + "  \xC2\xB7  channel " + sChannelId.substr(0, std::min<size_t>(8, sChannelId.size()));
+        writeSession();
+        ofLogNotice() << "REGISTERED as " << sArtist << " channel=" << sChannelId << " mount=" << sIceMount;
+    } else {
+        std::string err = resp.value("error", std::string(""));
+        if (err.empty()) err = "registration failed (HTTP " + (httpCode.empty() ? std::string("?") : httpCode) + ")";
+        regStatus = err;
+        sRegistered = false;
+        ofLogError() << "REGISTER failed: " << err;
+    }
+}
+
+// Grabs the last fully-rendered frame (fboFinal, one app-frame stale at most — irrelevant at a 1.5s
+// interval), downscales it, and hands it to `curl` as a detached background process so a slow/stalled
+// upload never blocks rendering.
+void ofApp::pushSnapshot() {
+    if (sSnapshotUrl.empty()) return;
+    fboSnap.begin();
+    ofClear(0, 0, 0, 255);
+    ofSetColor(255); ofEnableBlendMode(OF_BLENDMODE_DISABLED);
+    fboFinal.draw(0, 0, fboSnap.getWidth(), fboSnap.getHeight());
+    ofEnableBlendMode(OF_BLENDMODE_ALPHA);
+    fboSnap.end();
+    ofPixels px; fboSnap.readToPixels(px);
+    // PNG, not JPEG — the snapshot is a crisp HUD/vector-ish frame where JPEG's blocky lossy artifacts
+    // are very visible. PNG is lossless (no compression artifacts at all); BEST just picks the smallest
+    // lossless zlib level. Infrequent pushes (every SNAPSHOT_INTERVAL s) keep the larger file affordable.
+    std::string path = gsScratch("heliograph_snapshot.png");
+    ofSaveImage(px, path, OF_IMAGE_QUALITY_BEST);
+
+    // Full transmission metadata rides with the frame so the client can show the same telemetry as the
+    // on-screen HUD (channel/episode/artist/title/note/movement/HDG/waypoint/uptime). base64 header so
+    // unicode titles/notes survive; one request so we only need the single configured snapshot URL.
+    ofJson meta;
+    meta["channel"]  = sChannel;
+    meta["episode"]  = sTransmission;
+    meta["artist"]   = sArtist;
+    meta["title"]    = sTitle;
+    meta["note"]     = sNote;
+    meta["font"]     = kFontKeys[(int)ofClamp(sFontIdx, 0, kNumFonts - 1)];   // CHANNEL branding — client themes to match
+    meta["accent"]   = sAccent;
+    // Donation addresses — only broadcast once the artist confirmed the wallet is backed up, and only if valid.
+    if (sWalletBackedUp) {
+        if (gsValidLightning(sLnAddress))                                 meta["ln"]  = sLnAddress;
+        if (gsValidAddr(sBtcAddress) && sBtcAddress.rfind("bc1", 0) == 0) meta["btc"] = sBtcAddress;
+        if (gsValidAddr(sLqAddress)  && sLqAddress.rfind("lq1", 0) == 0)  meta["lq"]  = sLqAddress;
+    }
+    meta["level"]    = ofClamp(level, 0.0f, 1.0f);   // smoothed RMS loudness — drives the client console meter fill
+    meta["peak"]     = ofClamp(peak,  0.0f, 1.0f);   // decaying peak-hold — the peak marker on the client console meter
+    meta["waypoint"] = sWaypoint;
+    meta["hdgFreq"]  = subFreq;                 // detected primary sub-frequency (Hz) — HUD's HDG value
+    meta["hdgNote"]  = subNote;                 // its note letter
+    meta["date"]     = sDate;
+    meta["uptime"]   = (int)(t - broadcastStart);   // seconds on air
+    std::string metaB64 = gsBase64(meta.dump());
+
+    std::string log = gsScratch("gs_snapshot.log");
+    std::string auth = sSnapshotToken.empty() ? "" : (" -H " + gsShQuote("Authorization: Bearer " + sSnapshotToken));
+    std::string cmd = "curl -s -m 5 -T " + gsShQuote(path) + auth + " -H \"Content-Type: image/png\""
+        " -H " + gsShQuote("X-Captured-At: " + ofToString(gsEpochMs())) +
+        " -H " + gsShQuote("X-Transmission: " + metaB64) + " " +
+        gsShQuote(sSnapshotUrl) + " >>" + gsShQuote(log) + " 2>&1 &";   // trailing & backgrounds it — fire and forget
+    system(cmd.c_str());
+}
+
+// Inject the current wall-clock epoch-ms into the Icecast stream's ICY metadata (StreamTitle). Because
+// this rides INSIDE the audio stream, the client reads it exactly when that audio hits the playhead, so
+// (clientNow - timestamp) is the TRUE end-to-end audio lag — buffering and all. (Assumes the artist and
+// listener clocks are NTP-synced; the residual offset is tiny next to a multi-second stream lag.)
+// Uses the source credentials against Icecast's admin/metadata endpoint — same host/port as the stream.
+void ofApp::pushStreamTimestamp() {
+    if (sIceHost.empty() || sIcePassword.empty()) return;
+    std::string port  = sIcePort.empty()  ? "8000"     : sIcePort;
+    std::string mount = sIceMount.empty() ? "live.mp3" : sIceMount;
+    std::string url = "http://" + sIceHost + ":" + port + "/admin/metadata?mount=/" + mount +
+                      "&mode=updinfo&song=" + ofToString(gsEpochMs());
+    std::string log = gsScratch("gs_streamts.log");
+    std::string cmd = "curl -s -m 3 -u " + gsShQuote("source:" + sIcePassword) + " " + gsShQuote(url) +
+                      " >>" + gsShQuote(log) + " 2>&1 &";   // backgrounded — fire and forget
+    system(cmd.c_str());
+}
+
+//--------------------------------------------------------------
 void ofApp::resetConfig() {
     cfgLayout = 0; cfgMode = 0; cfgScale = 1.0f; cfgGlobalRot = 0;
     cfgCenter = 4.0f; cfgBands = 40; cfgTwist = 0;
@@ -1703,10 +2390,17 @@ void ofApp::keyPressed(int key) {
         if (key == OF_KEY_ESC) { settingsOpen = false; editingField = -1; }
         else if (editingField >= 0) {
             Field& f = fields[editingField];
-            if (key == OF_KEY_BACKSPACE) { if (!f.buf.empty()) f.buf.pop_back(); commitField(f); }
-            else if (key == OF_KEY_RETURN || key == OF_KEY_TAB) {                  // commit + jump to next
+            bool cmdHeld = ofGetKeyPressed(OF_KEY_LEFT_SUPER) || ofGetKeyPressed(OF_KEY_RIGHT_SUPER) ||
+                           ofGetKeyPressed(OF_KEY_LEFT_CONTROL) || ofGetKeyPressed(OF_KEY_RIGHT_CONTROL);
+            if ((cmdHeld && (key == 'v' || key == 'V')) || key == 22) {            // Cmd/Ctrl+V — paste (e.g. invite code)
+                std::string clip = gsClipboard();
+                for (char c : clip) if ((unsigned char)c >= 32 && (unsigned char)c < 127) f.buf += c;   // printable only, single-line
                 commitField(f);
-                editingField = (editingField + 1) % (int)fields.size();
+            }
+            else if (key == OF_KEY_BACKSPACE) { if (!f.buf.empty()) f.buf.pop_back(); commitField(f); }
+            else if (key == OF_KEY_RETURN || key == OF_KEY_TAB) {                  // commit + jump to next (never land on a section header)
+                commitField(f);
+                do { editingField = (editingField + 1) % (int)fields.size(); } while (fields[editingField].header || fields[editingField].tab != settingsTab);
                 fields[editingField].buf = fieldText(fields[editingField]);
             }
             else if (key >= 32 && key < 127) { f.buf += (char)key; commitField(f); }
@@ -1715,19 +2409,22 @@ void ofApp::keyPressed(int key) {
         return;
     }
     if (key == OF_KEY_ESC) { if (recWarn) recWarn = false; else if (modPickKind >= 0) modPickKind = -1; else if (helpMode) helpMode = false; else showHelp = false; return; }
-    if (key == 'e' || key == 'E') { settingsOpen = true; editingField = -1; return; }   // open editor
-    if (key == 'g' || key == 'G') showPanel = !showPanel;
+    if (key == 's' || key == 'S') { buildFields(); settingsOpen = true; editingField = -1; settingsTab = 0; return; }   // 'S' = settings — rebuilds ROUTING's device list fresh each time
+    if (key == 'c' || key == 'C') showPanel = !showPanel;                        // 'C' = controls (config panels)
     else if (key == 'h' || key == 'H') showHelp = !showHelp;                     // help overlay (all shortcuts)
     else if (key == 'i' || key == 'I') helpMode = !helpMode;                     // parameter help: hover any control for an explainer
-    else if (key == 'u' || key == 'U') showHud = !showHud;                       // hide/show the broadcast HUD
+    else if (key == 'u' || key == 'U') showHud = !showHud;                       // hide/show the broadcast HUD (all of it, incl. corner ticks)
+    else if (key == 't' || key == 'T') showMeta = !showMeta;                     // show/hide the SIGNAL + metadata/telemetry text (default off — clean frame; client shows the metadata)
+    else if (key == 'v' || key == 'V') showMeter = !showMeter;                   // show/hide the screen-only audio level meter along the bottom (never recorded)
     else if (key == 'f' || key == 'F') ofToggleFullscreen();
     else if (key == 'r' || key == 'R') { if (recording) stopRecording(); else startRecording(); }
+    else if (key == 'b' || key == 'B') { if (broadcasting) stopBroadcast(); else startBroadcast(); }   // live icecast + snapshot push (independent of local recording)
     else if (key == 'm' || key == 'M') {                                         // cycle modes (count comes from the Mode options — add a mode without touching this)
         for (auto& sl : sliders) if (sl.val == &cfgMode && !sl.opts.empty()) { cfgMode = fmodf(cfgMode + 1.0f, (float)sl.opts.size()); break; }
     }
     else if (key == OF_KEY_TAB)        cfgLayout = (cfgLayout < 0.5f) ? 1 : 0;   // toggle RADIAL / GRID
     else if (key == 'x' || key == 'X') resetConfig();                            // reset to init settings
-    else if (key == 's' || key == 'S') ofSaveScreen(gsScratch("heliograph_frame.png"));
+    else if (key == 'p' || key == 'P') ofSaveScreen(gsScratch("heliograph_frame.png"));   // screenshot (moved off 'S', now settings)
 }
 
 ofRectangle ofApp::displayRect() {
@@ -1742,17 +2439,45 @@ void ofApp::mousePressed(int x, int y, int button) {
     ofRectangle r = displayRect();
     float fx = (x - r.x) * RW / r.width, fy = (y - r.y) * RH / r.height;   // window -> FBO coords
     if (settingsOpen) {
-        for (size_t i = 0; i < fields.size(); i++)
+        for (int i = 0; i < 4; i++) if (settingsTabBox[i].inside(fx, fy)) { if (settingsTab != i) { settingsTab = i; editingField = -1; } return; }
+        if (settingsTab == 1 && refreshDevicesBox.inside(fx, fy)) { refreshAudioDevices(); return; }
+        if (settingsTab == 2 && registerBox.inside(fx, fy)) { if (editingField >= 0) { commitField(fields[editingField]); editingField = -1; } registerArtist(); return; }
+        for (size_t i = 0; i < fields.size(); i++) {
+            if (fields[i].tab != settingsTab) continue;                // hidden tab — its .box is stale from when it was last drawn
+            if (fields[i].header) continue;                            // section dividers aren't clickable
             if (fields[i].box.inside(fx, fy)) {
+                if (fields[i].locked || (fields[i].gateBackup && !sWalletBackedUp)) { editingField = -1; return; }   // read-only (registered name; or donation field before Wallet Backed Up = YES)
                 if (fields[i].folder) { pickRecDir(); editingField = -1; }   // folder field: open the native chooser (SAVE persists it)
                 else if (!fields[i].choices.empty() && fields[i].ip) {   // selector: click cycles
-                    *fields[i].ip = (*fields[i].ip + 1) % (int)fields[i].choices.size();
-                    if (fields[i].op && *fields[i].ip == (int)fields[i].choices.size() - 1) { editingField = (int)i; fields[i].buf = *fields[i].op; }   // landed on OTHER -> type a custom value
+                    int* ip = fields[i].ip;
+                    *ip = (*ip + 1) % (int)fields[i].choices.size();
+                    // ROUTING is a LIVE audition panel: device + channel changes take effect the instant
+                    // you click, so the SIGNAL meter and the visualizer react immediately — you can hunt
+                    // for the pair carrying signal without SAVE-ing after every click. (SAVE only persists
+                    // the choice to session.json.) Before this, a click just changed the dropdown text
+                    // while the stream stayed on whatever opened at launch — so picking the L-8 looked
+                    // like "no signal" because you were still auditioning the old device.
+                    if (ip == &sInputDeviceIdx) {
+                        sInputDevice = (sInputDeviceIdx <= 0 || sInputDeviceIdx >= (int)audioDeviceChoices.size()) ? std::string() : audioDeviceChoices[sInputDeviceIdx];
+                        sInputChannelPair = 0;   // new device — its channel layout differs; start at the first pair
+                        stream.close(); setupAudio();
+                        buildFields();           // rebuild the channel-pair choices for the new device's channel count
+                        editingField = -1;
+                        return;                  // fields[] was just rebuilt — stop iterating it
+                    }
+                    if (ip == &sInputChannelPair) {
+                        applyChannelSelection();                       // instant — moves the read window, no reopen
+                        sInputChannelPairAtOpen = sInputChannelPair;   // already applied live; don't re-open again on SAVE
+                        editingField = -1;
+                        return;
+                    }
+                    if (fields[i].op && *ip == (int)fields[i].choices.size() - 1) { editingField = (int)i; fields[i].buf = *fields[i].op; }   // landed on OTHER -> type a custom value
                     else editingField = -1;
                 }
                 else { editingField = (int)i; fields[i].buf = fieldText(fields[i]); }
                 return;
             }
+        }
         if (saveBox.inside(fx, fy)) { writeSession(); settingsOpen = false; editingField = -1; }   // SAVE saves AND closes the dialog
         return;
     }
@@ -1866,4 +2591,4 @@ void ofApp::mouseDragged(int x, int y, int button) {
 void ofApp::mouseReleased(int x, int y, int button) { activeSlider = -1; activeModAmt = -1; camDrag = 0; }
 
 void ofApp::windowResized(int w, int h) {}
-void ofApp::exit() { if (recording) stopRecording(); stream.close(); }
+void ofApp::exit() { if (recording) stopRecording(); if (broadcasting) stopBroadcast(); stream.close(); }
