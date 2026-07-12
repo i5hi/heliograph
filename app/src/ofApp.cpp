@@ -1109,10 +1109,15 @@ void ofApp::loadImages() {
     ofDirectory dir(folder);
     dir.allowExt("png"); dir.allowExt("jpg"); dir.allowExt("jpeg"); dir.allowExt("gif"); dir.allowExt("bmp"); dir.allowExt("tif"); dir.allowExt("tiff");
     dir.listDir(); dir.sort();
+    // Load as NORMALIZED (GL_TEXTURE_2D) textures so texcoords are 0..1 — the feather mesh relies on that
+    // (oF defaults to ARB rectangle textures under GL 2.1, whose texcoords are in pixels).
+    bool arb = ofGetUsingArbTex();
+    ofDisableArbTex();
     for (size_t i = 0; i < dir.size(); i++) {
         ofImage im;
-        if (im.load(dir.getPath(i))) { im.setUseTexture(true); imgList.push_back(im); }
+        if (im.load(dir.getPath(i))) { imgList.push_back(im); }
     }
+    if (arb) ofEnableArbTex();
     imgCur = imgPrev = 0; imgFade = 1.0f; imgHoldT = t; imgKenSeed = ofRandom(1000);
     ofLogNotice() << "IMAGE: loaded " << imgList.size() << " image(s) from " << folder;
 }
@@ -1130,25 +1135,18 @@ void ofApp::drawImageTex(ofImage& im, float cx, float cy, float fw, float fh, fl
     float iw = im.getWidth(), ih = im.getHeight();
     if (iw < 1 || ih < 1) return;
     float cover = std::max(fw / iw, fh / ih);                 // cover the frame, preserve aspect
-    float w = iw * cover, h = ih * cover;
+    float w = iw * cover, h = ih * cover, hw = w * 0.5f, hh = h * 0.5f;
     ofPushMatrix();
     ofTranslate(cx, cy);
     ofRotateZDeg(ang);
-    ofSetColor(tint, (int)ofClamp(alpha * 255.0f, 0, 255));
-    ofTexture& tex = im.getTexture();
-    tex.bind();
-    if (!soft) {                                              // plain quad — GLOW/additive does the blending
-        ofMesh q; q.setMode(OF_PRIMITIVE_TRIANGLE_STRIP);
-        float hw = w * 0.5f, hh = h * 0.5f, tw = im.getWidth(), th = im.getHeight();
-        q.addVertex({-hw, -hh, 0}); q.addTexCoord({0, 0});
-        q.addVertex({ hw, -hh, 0}); q.addTexCoord({tw, 0});
-        q.addVertex({-hw,  hh, 0}); q.addTexCoord({0, th});
-        q.addVertex({ hw,  hh, 0}); q.addTexCoord({tw, th});
-        q.draw();
-    } else {                                                  // radial-alpha grid → feathered oval that dissolves into the bg
+    if (!soft) {                                              // solid: let ofImage handle texturing (correct on any GL)
+        ofSetColor(tint, (int)ofClamp(alpha * 255.0f, 0, 255));
+        im.draw(-hw, -hh, w, h);
+    } else {                                                  // feathered: per-vertex-alpha grid dissolves the edges into the bg
+        ofTexture& tex = im.getTexture();
+        tex.bind();
         const int N = 16;
         ofMesh m; m.setMode(OF_PRIMITIVE_TRIANGLES);
-        float tw = im.getWidth(), th = im.getHeight();
         float inner = 1.0f - ofClamp(feather, 0, 0.98f);      // radius (0..1) where the fade begins
         for (int gy = 0; gy <= N; gy++) for (int gx = 0; gx <= N; gx++) {
             float u = gx / (float)N, v = gy / (float)N;
@@ -1156,7 +1154,7 @@ void ofApp::drawImageTex(ofImage& im, float cx, float cy, float fw, float fh, fl
             float r = std::min(1.0f, sqrtf((u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f)) * 2.0f);
             float a = 1.0f - ofClamp((r - inner) / std::max(0.001f, 1.0f - inner), 0, 1);   // 1 at centre → 0 at edge
             a = a * a * (3 - 2 * a);                           // smoothstep
-            m.addVertex({px, py, 0}); m.addTexCoord({u * tw, v * th});
+            m.addVertex({px, py, 0}); m.addTexCoord({u, v});   // NORMALIZED texcoords (images loaded with ARB disabled)
             m.addColor(ofColor(tint, (int)ofClamp(alpha * a * 255.0f, 0, 255)));
         }
         auto idx = [&](int x, int y){ return y * (N + 1) + x; };
@@ -1165,8 +1163,8 @@ void ofApp::drawImageTex(ofImage& im, float cx, float cy, float fw, float fh, fl
             m.addIndex(idx(gx + 1, gy)); m.addIndex(idx(gx + 1, gy + 1)); m.addIndex(idx(gx, gy + 1));
         }
         m.draw();
+        tex.unbind();
     }
-    tex.unbind();
     ofPopMatrix();
 }
 
