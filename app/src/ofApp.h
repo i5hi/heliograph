@@ -189,7 +189,16 @@ public:
     float cfgImgInterval = 8.0f;   // seconds each image is held before advancing
     float cfgImgTrans    = 1.5f;   // crossfade duration (s)
     float cfgImgAudio    = 0.3f;   // audio-reactive opacity/scale pulse amount (0 = static)
-    std::vector<ofImage> imgList;  // loaded from ~/.heliograph/images/
+    std::string sImgDir = "";      // chosen images folder ("" = default ~/.heliograph/images/), persisted
+    // Screen-only IMAGE UI (drawn AFTER the FBO — never in the recording / broadcast / snapshots):
+    bool   imgBarOpen = true;      // the bottom thumbnail carousel — default shown, toggle to hide
+    ofRectangle imgAddBox;         // "ADD IMAGES" (folder picker) button
+    ofRectangle imgBarToggle;      // collapse/expand handle for the carousel
+    std::vector<ofRectangle> imgThumbBox;   // per-image thumbnail hit rects
+    bool   pickImagesFolder();     // native folder chooser -> sImgDir -> reload
+    void   drawImageBar();         // screen-only: carousel + add button (IMAGE type)
+    void   imageGoto(int idx);     // crossfade to a specific image
+    std::vector<ofImage> imgList;  // loaded from the images folder
     int    imgCur = 0, imgPrev = 0;       // current + outgoing (during a crossfade) indices
     float  imgFade = 1.0f;                // crossfade progress: 1 = settled on imgCur
     float  imgHoldT = 0;                  // t of the last advance (drives auto-advance)

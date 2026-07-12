@@ -313,6 +313,7 @@ void ofApp::loadSession() {
             sArtifact  = j.value("artifact", sArtifact);
             sShorthand = j.value("shorthand", sShorthand);
             sRecDir    = j.value("recDir", sRecDir);
+            sImgDir    = j.value("imgDir", sImgDir);   // IMAGE type: chosen images folder
             sInputDevice      = j.value("inputDevice", sInputDevice);
             sInputChannelPair = j.value("inputChannelPair", sInputChannelPair);
             if (j.contains("broadcast")) {
@@ -355,8 +356,8 @@ void ofApp::buildSliders() {
     };
     // FOREST disabled (uncomment to restore): cfgTreeLen / cfgAngle / cfgTreeOpacity / cfgSway
     // ---- LAYOUT tab (right): layout / mode / fill / falloff ----
-    addChoice("Type",   &cfgLayout, {"RADIAL", "GRID"}, 0);                   // 0 Radial · 1 Grid (or press TAB)
-    addChoice("Mode",   &cfgMode,   {"ORBIT", "VEHICLE", "PLATFORM", "HELIX-S", "HELIX-D", "IMAGE"}, 0); sliders.back().icons = true;   // ○ △ ▢ + static/dynamic helix + IMAGE slideshow (or 'm')
+    addChoice("Type",   &cfgLayout, {"RADIAL", "GRID", "IMAGE"}, 0);          // 0 Radial · 1 Grid (TAB toggles these two) · 2 Image slideshow
+    addChoice("Mode",   &cfgMode,   {"ORBIT", "VEHICLE", "PLATFORM", "HELIX-S", "HELIX-D"}, 0); sliders.back().icons = true;   // ○ △ ▢ + static/dynamic helix (or 'm') — hidden in IMAGE type
     addChoice("Fill", &cfgFill, {"OUTLINE", "FILL"}, 0); sliders.back().toggleMask = true;   // independent toggles: bit0 OUTLINE · bit1 FILL · select BOTH for fill-with-outline
     addChoice("Falloff", &cfgFalloff, {"EUCLID", "DIAMOND", "FRAME", "REVERSE"}, 0);    // taper/fade curve — both layouts (REVERSE flips the width taper)
     // ---- LEFT column: the modulatable parameters (always shown) ----
@@ -392,20 +393,21 @@ void ofApp::buildSliders() {
     add("Spread",   &cfgSpread,    0, 12,    false, 1, 1, 0);
     add("Punch",    &cfgPunch,     0, 4,     false, 1, 1, 0);   // beat/kick impact on the whole visual
 
-    // ---- IMAGE mode (show=3 → shown only when Mode = IMAGE). LAYOUT tab. ----
-    addChoice("Blend", &cfgImgBlend, {"GLOW", "SOFT"}, 3);   // GLOW = additive (dissolves into the dark bg) · SOFT = alpha + radial feather
-    add("Opacity",  &cfgImgOpacity, 0, 1,     false, 2, 0, 3);
-    add("Feather",  &cfgImgFeather, 0, 1,     false, 2, 0, 3);   // SOFT edge dissolve
-    add("Img Scale",&cfgImgScale,   0.3f, 3,  false, 2, 0, 3);
-    add("Pan X",    &cfgImgPanX,   -1, 1,     false, 2, 0, 3);
-    add("Pan Y",    &cfgImgPanY,   -1, 1,     false, 2, 0, 3);
-    add("Rotate",   &cfgImgRot,    -180, 180, false, 0, 0, 3);
-    add("Ken Burns",&cfgImgKen,     0, 1,     false, 2, 0, 3);   // slow zoom/pan drift per image
-    add("Bright",   &cfgImgBright,  0, 2,     false, 2, 0, 3);
-    add("Tint",     &cfgImgTint,    0, 1,     false, 2, 0, 3);   // 0 own colour .. 1 channel accent
-    add("Hold",     &cfgImgInterval,2, 30,    false, 1, 0, 3);   // seconds per image
-    add("Fade",     &cfgImgTrans,   0.2f, 5,  false, 1, 0, 3);   // crossfade duration
-    add("Reactive", &cfgImgAudio,   0, 1,     false, 2, 0, 3);   // audio-reactive pulse
+    // ---- IMAGE type controls (show=3 → shown only when Type = IMAGE). LEFT column (tab -1), like the
+    //      other modulatable params, so they auto-fit the column instead of overflowing a fixed tab. ----
+    addChoice("Blend", &cfgImgBlend, {"GLOW", "SOFT"}, 3); sliders.back().tab = -1;   // GLOW additive (dissolves into the dark bg) · SOFT alpha + radial feather
+    add("Opacity",  &cfgImgOpacity, 0, 1,     false, 2, -1, 3);
+    add("Feather",  &cfgImgFeather, 0, 1,     false, 2, -1, 3);   // SOFT edge dissolve
+    add("Img Scale",&cfgImgScale,   0.3f, 3,  false, 2, -1, 3);
+    add("Pan X",    &cfgImgPanX,   -1, 1,     false, 2, -1, 3);
+    add("Pan Y",    &cfgImgPanY,   -1, 1,     false, 2, -1, 3);
+    add("Rotate",   &cfgImgRot,    -180, 180, false, 0, -1, 3);
+    add("Ken Burns",&cfgImgKen,     0, 1,     false, 2, -1, 3);   // slow zoom/pan drift per image
+    add("Bright",   &cfgImgBright,  0, 2,     false, 2, -1, 3);
+    add("Tint",     &cfgImgTint,    0, 1,     false, 2, -1, 3);   // 0 own colour .. 1 channel accent
+    add("Hold",     &cfgImgInterval,2, 30,    false, 1, -1, 3);   // seconds per image
+    add("Fade",     &cfgImgTrans,   0.2f, 5,  false, 1, -1, 3);   // crossfade duration
+    add("Reactive", &cfgImgAudio,   0, 1,     false, 2, -1, 3);   // audio-reactive pulse
 
     relayout();
 }
@@ -456,13 +458,13 @@ void ofApp::applyMods() {
 }
 
 bool ofApp::sliderVisible(const Slider& s) {
-    bool imageMode = cfgMode >= 4.5f;            // IMAGE is the last Mode option
-    if (s.val == &cfgMode) return true;          // the Mode selector is ALWAYS available (so you can switch back)
-    if (s.show == 3) return imageMode;           // IMAGE-only controls
-    if (imageMode) return false;                 // in IMAGE mode, hide all the visualizer params
+    bool imageType = cfgLayout >= 1.5f;          // IMAGE is Type option 2 (RADIAL · GRID · IMAGE)
+    if (s.val == &cfgLayout) return true;        // the Type selector is ALWAYS available (so you can switch back)
+    if (s.show == 3) return imageType;           // IMAGE-only controls
+    if (imageType) return false;                 // IMAGE hides every visualizer param (incl. the Mode selector)
     if (s.show == 0) return true;
     if (s.show == 1) return cfgLayout < 0.5f;    // radial-only
-    return cfgLayout >= 0.5f;                    // grid-only
+    return cfgLayout >= 0.5f;                    // grid-only (image already returned above)
 }
 
 void ofApp::relayout() {
@@ -486,7 +488,7 @@ void ofApp::relayout() {
             for (int i = 0; i < n; i++) s.boxes.push_back(ofRectangle(s.track.x + i * (segW + g), s.track.y, segW, rh));
         }
     }
-    lastLayout = (cfgLayout >= 0.5f) ? 1 : 0;
+    if (cfgLayout < 1.5f) lastLayout = (cfgLayout >= 0.5f) ? 1 : 0;   // IMAGE (Type 2) doesn't own a layout-state slot
 }
 
 //--------------------------------------------------------------
@@ -630,9 +632,12 @@ void ofApp::computeFFT(const std::vector<float>& in, std::vector<float>& outMag)
 void ofApp::update() {
     float dt = std::min(ofGetLastFrameTime(), 0.05);
     t += dt;
-    // IMAGE mode: rescan the folder on entry, drive the crossfade + auto-advance timer.
-    bool imgActive = cfgMode >= 4.5f;
-    if (imgActive && !imgWasActive) loadImages();          // entering IMAGE mode → pick up newly-dropped files
+    // IMAGE type (Type == IMAGE): rescan on entry, re-pack the panel on any enter/leave, drive the slideshow.
+    bool imgActive = cfgLayout >= 1.5f;
+    if (imgActive != imgWasActive) {                        // entered or left IMAGE
+        if (imgActive) loadImages();                       // entering → pick up newly-added files
+        relayout();                                        // swap the panel between image controls and the visualizer params
+    }
     imgWasActive = imgActive;
     if (imgActive && imgList.size() > 0) {
         if (imgFade < 1.0f) imgFade = std::min(1.0f, imgFade + dt / std::max(0.1f, cfgImgTrans));   // advance the crossfade
@@ -695,10 +700,10 @@ void ofApp::update() {
     rotationX += cfgRotX; rotationY += cfgRotY; rotationZ += cfgRotZ;   // SPIN
     camX += cfgCamX; camY += cfgCamY; camZ += cfgCamZ;                   // CAMERA
     applyMods();
-    {   // toggled RADIAL/GRID -> swap each layout's independent settings, then re-pack the panel
+    if (cfgLayout < 1.5f) {   // RADIAL/GRID keep independent settings; IMAGE (Type 2) has none — skip the swap
         int cur = (cfgLayout >= 0.5f) ? 1 : 0;
         if (cur != lastLayout) {
-            if (lastLayout >= 0) saveLayoutState(lastLayout);
+            if (lastLayout >= 0 && lastLayout <= 1) saveLayoutState(lastLayout);
             loadLayoutState(cur);
             relayout();   // also sets lastLayout = cur
         }
@@ -1100,15 +1105,23 @@ void ofApp::drawForest() {
 // (bright parts glow); SOFT blend feathers the rectangle edges into the bg with a radial alpha mesh.
 void ofApp::loadImages() {
     imgList.clear();
-    ofDirectory dir(gsImagesDir());
-    dir.allowExt("png"); dir.allowExt("jpg"); dir.allowExt("jpeg"); dir.allowExt("gif"); dir.allowExt("bmp");
+    std::string folder = (!sImgDir.empty() && ofDirectory::doesDirectoryExist(sImgDir)) ? sImgDir : gsImagesDir();
+    ofDirectory dir(folder);
+    dir.allowExt("png"); dir.allowExt("jpg"); dir.allowExt("jpeg"); dir.allowExt("gif"); dir.allowExt("bmp"); dir.allowExt("tif"); dir.allowExt("tiff");
     dir.listDir(); dir.sort();
     for (size_t i = 0; i < dir.size(); i++) {
         ofImage im;
         if (im.load(dir.getPath(i))) { im.setUseTexture(true); imgList.push_back(im); }
     }
     imgCur = imgPrev = 0; imgFade = 1.0f; imgHoldT = t; imgKenSeed = ofRandom(1000);
-    ofLogNotice() << "IMAGE mode: loaded " << imgList.size() << " image(s) from " << gsImagesDir();
+    ofLogNotice() << "IMAGE: loaded " << imgList.size() << " image(s) from " << folder;
+}
+
+bool ofApp::pickImagesFolder() {                               // native folder chooser -> use that folder as the image source
+    std::string start = (!sImgDir.empty()) ? sImgDir : gsImagesDir();
+    ofFileDialogResult r = ofSystemLoadDialog("Choose a folder of images", true, start);
+    if (r.bSuccess && !r.getPath().empty()) { sImgDir = r.getPath(); loadImages(); writeSession(); return true; }
+    return false;
 }
 
 // Draw one image, fit-to-cover the frame, with optional radial feather (SOFT) or plain quad (GLOW).
@@ -1159,17 +1172,22 @@ void ofApp::drawImageTex(ofImage& im, float cx, float cy, float fw, float fh, fl
 
 void ofApp::imageAdvance(int dir) {
     if (imgList.size() < 2) return;
-    imgPrev = imgCur;
-    imgCur = ((imgCur + dir) % (int)imgList.size() + (int)imgList.size()) % (int)imgList.size();
+    imageGoto(((imgCur + dir) % (int)imgList.size() + (int)imgList.size()) % (int)imgList.size());
+}
+void ofApp::imageGoto(int idx) {
+    if (imgList.empty()) return;
+    idx = ofClamp(idx, 0, (int)imgList.size() - 1);
+    if (idx == imgCur && imgFade >= 1.0f) return;             // already showing it
+    imgPrev = imgCur; imgCur = idx;
     imgFade = 0.0f; imgHoldT = t; imgKenSeed = ofRandom(1000);
 }
 
 void ofApp::drawImageMode() {
     float W = RW - 2 * fm, H = RH - 2 * fm, cx = RW * 0.5f, cy = RH * 0.5f;
-    if (imgList.empty()) {                                    // empty-folder hint (screen-only feel, but drawn in-frame)
+    if (imgList.empty()) {                                    // empty-folder hint (drawn in-frame — only shows with no images)
         ofSetColor(150, 156, 154);
-        std::string h1 = "IMAGE MODE";
-        std::string h2 = "drop images into  ~/.heliograph/images/  then press  I  to reload";
+        std::string h1 = "IMAGE";
+        std::string h2 = "click  + ADD IMAGES  below to choose a folder of pictures";
         fTitle.drawString(h1, cx - fTitle.stringWidth(h1) * 0.5f, cy - 10 * S);
         fUI.drawString(h2, cx - fUI.stringWidth(h2) * 0.5f, cy + 24 * S);
         return;
@@ -1200,10 +1218,58 @@ void ofApp::drawImageMode() {
     ofEnableBlendMode(OF_BLENDMODE_ALPHA);
 }
 
+// Screen-only IMAGE UI: the ADD button + a bottom thumbnail carousel. Drawn AFTER the scene FBO (in
+// draw()), so it is NEVER part of the recording, broadcast, or snapshots. Hit rects are in FBO coords
+// (mousePressed maps clicks into the same space).
+void ofApp::drawImageBar() {
+    imgThumbBox.clear();
+    float barH = 92 * S, pad = 12 * S, by = RH - fm - barH;
+    // toggle handle — always shown so you can collapse/expand the carousel
+    float thW = 150 * S, thH = 22 * S;
+    imgBarToggle = ofRectangle(RW * 0.5f - thW * 0.5f, by - thH - 4 * S, thW, thH);
+    ofSetColor(22, 25, 28, 235); ofDrawRectangle(imgBarToggle);
+    ofNoFill(); ofSetLineWidth(1 * S); ofSetColor(90, 98, 94); ofDrawRectangle(imgBarToggle); ofFill();
+    ofSetColor(184, 190, 186);
+    std::string tlab = imgBarOpen ? "HIDE  IMAGES" : "IMAGES  (" + ofToString(imgList.size()) + ")";
+    ofRectangle tb = fUI.getStringBoundingBox(tlab, 0, 0);
+    fUI.drawString(tlab, floorf(imgBarToggle.x + (thW - tb.width) * 0.5f - tb.x), floorf(imgBarToggle.y + (thH - tb.height) * 0.5f - tb.y));
+    if (!imgBarOpen) { imgAddBox = ofRectangle(-99999, -99999, 0, 0); return; }
+    ofSetColor(14, 16, 18, 225); ofDrawRectangle(0, by, RW, barH);
+    ofSetColor(58, 64, 62); ofDrawLine(0, by, RW, by);
+    // ADD IMAGES button (left)
+    float addW = 160 * S, thumbH = barH - 2 * pad;
+    imgAddBox = ofRectangle(fm + pad, by + pad, addW, thumbH);
+    ofSetColor(34, 38, 42); ofDrawRectangle(imgAddBox);
+    ofNoFill(); ofSetLineWidth(1 * S); ofSetColor(96, 104, 100); ofDrawRectangle(imgAddBox); ofFill();
+    ofSetColor(202, 208, 204); std::string al = "+ ADD IMAGES";
+    ofRectangle ab = fUI.getStringBoundingBox(al, 0, 0);
+    fUI.drawString(al, floorf(imgAddBox.x + (addW - ab.width) * 0.5f - ab.x), floorf(imgAddBox.y + (thumbH - ab.height) * 0.5f - ab.y));
+    // thumbnails — fit all in the remaining width (shrink to fit; contain each image, current one accented)
+    int n = (int)imgList.size();
+    if (n == 0) return;
+    float stripX = imgAddBox.getMaxX() + pad * 1.5f, availW = RW - fm - pad - stripX, gap = 8 * S;
+    float thumbW = ofClamp((availW - gap * (n - 1)) / n, 24 * S, 130 * S);
+    float x = stripX;
+    for (int i = 0; i < n; i++) {
+        ofRectangle tr(x, by + pad, thumbW, thumbH);
+        imgThumbBox.push_back(tr);
+        ofSetColor(8, 9, 10); ofDrawRectangle(tr);                         // letterbox backing
+        ofImage& im = imgList[i];
+        if (im.isAllocated() && im.getWidth() > 0) {
+            float con = std::min(tr.width / im.getWidth(), tr.height / im.getHeight());
+            float dw = im.getWidth() * con, dh = im.getHeight() * con;
+            ofSetColor(255); im.draw(tr.x + (tr.width - dw) * 0.5f, tr.y + (tr.height - dh) * 0.5f, dw, dh);
+        }
+        bool cur = (i == imgCur);
+        ofNoFill(); ofSetLineWidth((cur ? 2.2f : 1.0f) * S); ofSetColor(cur ? cNeon : ofColor(70, 76, 74)); ofDrawRectangle(tr); ofFill();
+        x += thumbW + gap;
+    }
+}
+
 void ofApp::drawScene() {
     drawSpace();
     drawStars();
-    if (cfgMode >= 4.5f) { drawImageMode(); return; }   // IMAGE mode replaces the portal visualizer
+    if (cfgLayout >= 1.5f) { drawImageMode(); return; }   // IMAGE type replaces the portal visualizer
     ofEnableBlendMode(OF_BLENDMODE_ADD);
     drawPortal();
     ofEnableBlendMode(OF_BLENDMODE_ALPHA);
@@ -1234,6 +1300,7 @@ void ofApp::draw() {
     if (settingsOpen)   drawSettings();    // 'e' — edit session content
     else if (showPanel) drawPanels();      // 'g' — config panel
     if (helpMode && showPanel && !settingsOpen) drawParamHelp();   // 'i' — hover-help over the live controls
+    if (cfgLayout >= 1.5f && !settingsOpen) drawImageBar();   // IMAGE type: screen-only carousel + ADD button (never recorded)
     if (showHelp)       drawHelp();        // 'h' — shortcuts overlay
     ofPopMatrix();
 
@@ -1453,11 +1520,6 @@ void ofApp::drawPanels() {
                     if (i == 0) ofDrawCircle(cx, cy, r);
                     else if (i == 1) { ofBeginShape(); for (int k = 0; k < 3; k++) { float a = TWO_PI * k / 3 - HALF_PI; ofVertex(cx + cosf(a) * r * 1.12f, cy + sinf(a) * r * 1.12f); } ofEndShape(true); }
                     else if (i == 2) { float h2 = r * 0.92f; ofDrawRectangle(cx - h2, cy - h2, h2 * 2, h2 * 2); }
-                    else if (i == 5) {                                              // IMAGE — a picture glyph (frame + sun + mountain)
-                        ofNoFill(); ofSetLineWidth(1.4f * S); ofDrawRectangle(cx - r, cy - r * 0.82f, r * 2, r * 1.64f);
-                        ofFill(); ofDrawCircle(cx - r * 0.42f, cy - r * 0.34f, r * 0.22f);
-                        ofBeginShape(); ofVertex(cx - r * 0.85f, cy + r * 0.7f); ofVertex(cx - r * 0.05f, cy - r * 0.05f); ofVertex(cx + r * 0.9f, cy + r * 0.7f); ofEndShape(true);
-                    }
                     else {
                         ofNoFill(); ofSetLineWidth(1.6f * S);
                         ofPolyline pa, pb; int K = 16;
@@ -1837,6 +1899,7 @@ void ofApp::writeSession() {
     j["artifact"]  = sArtifact;
     j["shorthand"] = sShorthand;
     j["recDir"]    = sRecDir;
+    j["imgDir"]    = sImgDir;
     j["inputDevice"]      = sInputDevice;
     j["inputChannelPair"] = sInputChannelPair;
     j["broadcast"]["iceHost"]       = sIceHost;
@@ -1908,8 +1971,10 @@ void ofApp::loadPresetFile(const std::string& name) {
         if (p.contains("lfo")   && k < (int)p["lfo"].size())   readMod(lfoMod[k],   p["lfo"][k]);   else lfoMod[k]   = ModSlot();
     }
     modPickKind = -1; activeModAmt = -1;
-    lastLayout = (int)cfgLayout;            // preset carries its own layout type; lock it so the layout-swap doesn't clobber the loaded values
-    saveLayoutState((int)cfgLayout);        // store the preset into the active layout's slot
+    if (cfgLayout < 1.5f) {                  // presets store the RADIAL/GRID visualizer state (IMAGE has none)
+        lastLayout = (int)cfgLayout;         // lock the loaded layout so the swap doesn't clobber it
+        saveLayoutState((int)cfgLayout);     // store the preset into the active layout's slot
+    }
     relayout();
     saveFlash = t;
 }
@@ -2620,9 +2685,9 @@ void ofApp::keyPressed(int key) {
     else if (key == 'm' || key == 'M') {                                         // cycle modes (count comes from the Mode options — add a mode without touching this)
         for (auto& sl : sliders) if (sl.val == &cfgMode && !sl.opts.empty()) { cfgMode = fmodf(cfgMode + 1.0f, (float)sl.opts.size()); break; }
     }
-    else if (key == OF_KEY_LEFT  && cfgMode >= 4.5f) imageAdvance(-1);           // IMAGE mode: previous image
-    else if (key == OF_KEY_RIGHT && cfgMode >= 4.5f) imageAdvance(+1);           // IMAGE mode: next image
-    else if (key == OF_KEY_TAB)        cfgLayout = (cfgLayout < 0.5f) ? 1 : 0;   // toggle RADIAL / GRID
+    else if (key == OF_KEY_LEFT  && cfgLayout >= 1.5f) imageAdvance(-1);         // IMAGE type: previous image
+    else if (key == OF_KEY_RIGHT && cfgLayout >= 1.5f) imageAdvance(+1);         // IMAGE type: next image
+    else if (key == OF_KEY_TAB)        cfgLayout = (cfgLayout < 0.5f) ? 1 : 0;   // toggle RADIAL / GRID (not IMAGE)
     else if (key == 'x' || key == 'X') resetConfig();                            // reset to init settings
     else if (key == 'p' || key == 'P') ofSaveScreen(gsScratch("heliograph_frame.png"));   // screenshot (moved off 'S', now settings)
 }
@@ -2692,6 +2757,14 @@ void ofApp::mousePressed(int x, int y, int button) {
         }
         if (saveBox.inside(fx, fy)) { writeSession(); settingsOpen = false; editingField = -1; }   // SAVE saves AND closes the dialog
         return;
+    }
+    // IMAGE type: the screen-only carousel is clickable even when the panels are hidden.
+    if (cfgLayout >= 1.5f) {
+        if (imgBarToggle.width > 0 && imgBarToggle.inside(fx, fy)) { imgBarOpen = !imgBarOpen; return; }
+        if (imgBarOpen) {
+            if (imgAddBox.width > 0 && imgAddBox.inside(fx, fy)) { pickImagesFolder(); return; }
+            for (size_t i = 0; i < imgThumbBox.size(); i++) if (imgThumbBox[i].inside(fx, fy)) { imageGoto((int)i); return; }
+        }
     }
     if (!showPanel) return;   // panels are interactive mid-recording too (they're screen-only, never captured)
     // ---- tab bar ----
