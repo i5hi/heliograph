@@ -41,9 +41,8 @@ CURRENT_PROJECT_VERSION = 1
 // ICONS
 
 // default oF app icon
-ICON_NAME = of.icns
-ICON_NAME[config=Debug] = of_debug.icns
-ICON_FILE = $(OF_PATH)/libs/openFrameworksCompiled/project/osx/$(ICON_NAME)
+ICON_NAME = heliograph.icns
+ICON_FILE = heliograph.icns
 
 // custom app icon, placed in main project folder
 //ICON_NAME = MyApp.icns

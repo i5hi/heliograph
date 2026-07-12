@@ -186,13 +186,15 @@ public:
     float cfgImgKen      = 0.5f;   // Ken Burns amount — slow zoom/pan drift per image (0 = still)
     float cfgImgBright   = 1.0f;   // brightness 0..2
     float cfgImgTint     = 0;      // 0 = image's own colour .. 1 = fully tinted to the channel accent (cNeon)
-    float cfgImgInterval = 8.0f;   // seconds each image is held before advancing
+    float cfgImgAuto     = 0.0f;   // 0 = locked (click to transition) · 1 = auto-cycle through the folder
+    float cfgImgInterval = 8.0f;   // seconds each image is held before advancing (auto-cycle only)
     float cfgImgTrans    = 1.5f;   // crossfade duration (s)
     float cfgImgAudio    = 0.3f;   // audio-reactive opacity/scale pulse amount (0 = static)
     std::string sImgDir = "";      // chosen images folder ("" = default ~/.heliograph/images/), persisted
     // Screen-only IMAGE UI (drawn AFTER the FBO — never in the recording / broadcast / snapshots):
     bool   imgBarOpen = true;      // the bottom thumbnail carousel — default shown, toggle to hide
     ofRectangle imgAddBox;         // "ADD IMAGES" (folder picker) button
+    ofRectangle imgPanelAddBox;    // right control panel: ADD IMAGES button, under the Type selector (IMAGE type)
     ofRectangle imgBarToggle;      // collapse/expand handle for the carousel
     std::vector<ofRectangle> imgThumbBox;   // per-image thumbnail hit rects
     bool   pickImagesFolder();     // native folder chooser -> sImgDir -> reload

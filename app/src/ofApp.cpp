@@ -405,7 +405,8 @@ void ofApp::buildSliders() {
     add("Ken Burns",&cfgImgKen,     0, 1,     false, 2, -1, 3);   // slow zoom/pan drift per image
     add("Bright",   &cfgImgBright,  0, 2,     false, 2, -1, 3);
     add("Tint",     &cfgImgTint,    0, 1,     false, 2, -1, 3);   // 0 own colour .. 1 channel accent
-    add("Hold",     &cfgImgInterval,2, 30,    false, 1, -1, 3);   // seconds per image
+    addChoice("Auto Cycle", &cfgImgAuto, {"OFF", "ON"}, 3); sliders.back().tab = -1;   // OFF: locked, click to transition · ON: rotate through the folder
+    add("Hold",     &cfgImgInterval,2, 30,    false, 1, -1, 3);   // seconds per image (Auto Cycle only)
     add("Fade",     &cfgImgTrans,   0.2f, 5,  false, 1, -1, 3);   // crossfade duration
     add("Reactive", &cfgImgAudio,   0, 1,     false, 2, -1, 3);   // audio-reactive pulse
 
@@ -641,7 +642,7 @@ void ofApp::update() {
     imgWasActive = imgActive;
     if (imgActive && imgList.size() > 0) {
         if (imgFade < 1.0f) imgFade = std::min(1.0f, imgFade + dt / std::max(0.1f, cfgImgTrans));   // advance the crossfade
-        if (imgList.size() > 1 && (t - imgHoldT) > cfgImgInterval) imageAdvance(1);                 // auto-advance
+        if (cfgImgAuto >= 0.5f && imgList.size() > 1 && (t - imgHoldT) > cfgImgInterval) imageAdvance(1);  // auto-cycle (opt-in)
     }
     std::vector<float> w(N);
     { std::lock_guard<std::mutex> lock(mtx); for (int i = 0; i < N; i++) w[i] = ringBuf[(writePos + i) % N]; }
@@ -1231,21 +1232,16 @@ void ofApp::drawImageBar() {
     std::string tlab = imgBarOpen ? "HIDE  IMAGES" : "IMAGES  (" + ofToString(imgList.size()) + ")";
     ofRectangle tb = fUI.getStringBoundingBox(tlab, 0, 0);
     fUI.drawString(tlab, floorf(imgBarToggle.x + (thW - tb.width) * 0.5f - tb.x), floorf(imgBarToggle.y + (thH - tb.height) * 0.5f - tb.y));
-    if (!imgBarOpen) { imgAddBox = ofRectangle(-99999, -99999, 0, 0); return; }
+    imgAddBox = ofRectangle(-99999, -99999, 0, 0);   // ADD IMAGES now lives in the right panel under Type
+    if (!imgBarOpen) return;
     ofSetColor(14, 16, 18, 225); ofDrawRectangle(0, by, RW, barH);
     ofSetColor(58, 64, 62); ofDrawLine(0, by, RW, by);
-    // ADD IMAGES button (left)
-    float addW = 160 * S, thumbH = barH - 2 * pad;
-    imgAddBox = ofRectangle(fm + pad, by + pad, addW, thumbH);
-    ofSetColor(34, 38, 42); ofDrawRectangle(imgAddBox);
-    ofNoFill(); ofSetLineWidth(1 * S); ofSetColor(96, 104, 100); ofDrawRectangle(imgAddBox); ofFill();
-    ofSetColor(202, 208, 204); std::string al = "+ ADD IMAGES";
-    ofRectangle ab = fUI.getStringBoundingBox(al, 0, 0);
-    fUI.drawString(al, floorf(imgAddBox.x + (addW - ab.width) * 0.5f - ab.x), floorf(imgAddBox.y + (thumbH - ab.height) * 0.5f - ab.y));
+    float thumbH = barH - 2 * pad;
     // thumbnails — fit all in the remaining width (shrink to fit; contain each image, current one accented)
     int n = (int)imgList.size();
-    if (n == 0) return;
-    float stripX = imgAddBox.getMaxX() + pad * 1.5f, availW = RW - fm - pad - stripX, gap = 8 * S;
+    if (n == 0) { ofSetColor(120, 126, 122); std::string h = "no images — add a folder from the panel (C)  ·  Type ▸ IMAGE";
+                  fUI.drawString(h, fm + pad, by + barH * 0.5f + 4 * S); return; }
+    float stripX = fm + pad, availW = RW - fm - pad - stripX, gap = 8 * S;
     float thumbW = ofClamp((availW - gap * (n - 1)) / n, 24 * S, 130 * S);
     float x = stripX;
     for (int i = 0; i < n; i++) {
@@ -1578,7 +1574,7 @@ void ofApp::drawPanels() {
     float contentBottom = tby + tbh;
     presetAddBox = presetNameBox = ofRectangle(-99999, -99999, 0, 0);
     graphSubBox[0] = graphSubBox[1] = ofRectangle(-99999, -99999, 0, 0);
-    camPadBox = camZBox = ofRectangle(-99999, -99999, 0, 0);
+    camPadBox = camZBox = imgPanelAddBox = ofRectangle(-99999, -99999, 0, 0);
     presetBox.clear(); presetDelBox.clear();
     if (rightTab == 0) {                                     // GRAPH: GLOBAL / PRESETS sub-tabs
         float subG = 8 * S, subW = (rw - subG) * 0.5f, subY = fm + 162 * S;   // sub-tab sits just under the GRAPH/AUDIO/MOD tab bar
@@ -1586,11 +1582,16 @@ void ofApp::drawPanels() {
         graphSubBox[1] = ofRectangle(rx + subW + subG, subY, subW, 30 * S);
         if (graphSub == 0) {                                 // GLOBAL: choices + camera-angle pad + RESET
             for (auto& s : sliders) if (s.tab == 0 && sliderVisible(s)) contentBottom = std::max(contentBottom, s.track.y + s.track.height);
-            float padSz = 116 * S, padY = contentBottom + 36 * S;
-            camPadBox = ofRectangle(rx, padY, padSz, padSz);                                              // XY pad: camera X (vert) / Y (horiz) angle
-            camZBox   = ofRectangle(rx + padSz + 20 * S, padY + padSz - 12 * S, rw - padSz - 20 * S, 13 * S);   // Z roll slider beside the pad
-            contentBottom = padY + padSz;
-            resetBox = ofRectangle(rx, contentBottom + 28 * S, rw, 42 * S); contentBottom = resetBox.getMaxY();
+            if (cfgLayout >= 1.5f) {                          // IMAGE type: ADD IMAGES button under the Type selector (camera pad is irrelevant here)
+                imgPanelAddBox = ofRectangle(rx, contentBottom + 34 * S, rw, 44 * S);
+                contentBottom = imgPanelAddBox.getMaxY();
+            } else {
+                float padSz = 116 * S, padY = contentBottom + 36 * S;
+                camPadBox = ofRectangle(rx, padY, padSz, padSz);                                              // XY pad: camera X (vert) / Y (horiz) angle
+                camZBox   = ofRectangle(rx + padSz + 20 * S, padY + padSz - 12 * S, rw - padSz - 20 * S, 13 * S);   // Z roll slider beside the pad
+                contentBottom = padY + padSz;
+                resetBox = ofRectangle(rx, contentBottom + 28 * S, rw, 42 * S); contentBottom = resetBox.getMaxY();
+            }
         } else {                                             // PRESETS: list (load/delete) + "save current as preset" (with name entry)
             float y = subY + 30 * S + 48 * S, rh = 32 * S, g = 8 * S;   // leave room below the "PRESETS — click to load" hint
             presetBox.assign(presetList.size(), ofRectangle());
@@ -1651,6 +1652,12 @@ void ofApp::drawPanels() {
         chip(graphSubBox[0], "GLOBAL", graphSub == 0); chip(graphSubBox[1], "PRESETS", graphSub == 1);
         if (graphSub == 0) {
             for (auto& s : sliders) if (s.tab == 0 && sliderVisible(s)) drawSlider(s);
+            if (cfgLayout >= 1.5f) {                          // IMAGE type: ADD IMAGES button (folder picker) under the Type selector
+                ofSetColor(150, 156, 154);
+                fUI.drawString(imgList.empty() ? "no images yet — add a folder" : ofToString(imgList.size()) + " image" + (imgList.size() == 1 ? "" : "s") + " loaded",
+                               imgPanelAddBox.x, imgPanelAddBox.y - 10 * S);
+                chip(imgPanelAddBox, "+  ADD IMAGES", false);
+            } else {
             // ---- camera angle: XY pad (X = vertical, Y = horizontal) + Z roll slider ----
             ofSetColor(158, 164, 162); fUI.drawString("Camera Angle  (drag)", camPadBox.x, camPadBox.y - 8 * S);
             ofSetColor(22, 25, 28); ofDrawRectangle(camPadBox);
@@ -1667,6 +1674,7 @@ void ofApp::drawPanels() {
             float zf = ofMap(camManZ, -180, 180, 0, camZBox.width, true);
             ofSetColor(232, 237, 234); ofDrawRectangle(camZBox.x + ofClamp(zf - 1.5f * S, 0.f, camZBox.width - 3 * S), camZBox.y - 3 * S, 3 * S, camZBox.height + 6 * S);
             chip(resetBox, "RESET", false);
+            }
         }
         else {                                               // PRESETS list + save-as (with name entry)
             if (presetNaming) {
@@ -2759,15 +2767,14 @@ void ofApp::mousePressed(int x, int y, int button) {
     // IMAGE type: the screen-only carousel is clickable even when the panels are hidden.
     if (cfgLayout >= 1.5f) {
         if (imgBarToggle.width > 0 && imgBarToggle.inside(fx, fy)) { imgBarOpen = !imgBarOpen; return; }
-        if (imgBarOpen) {
-            if (imgAddBox.width > 0 && imgAddBox.inside(fx, fy)) { pickImagesFolder(); return; }
+        if (imgBarOpen)
             for (size_t i = 0; i < imgThumbBox.size(); i++) if (imgThumbBox[i].inside(fx, fy)) { imageGoto((int)i); return; }
-        }
     }
     if (!showPanel) return;   // panels are interactive mid-recording too (they're screen-only, never captured)
     // ---- tab bar ----
     for (int i = 0; i < 3; i++) if (tabBox[i].inside(fx, fy)) { if (rightTab != i) { rightTab = i; modPickKind = -1; presetNaming = false; relayout(); } return; }
     if (resetBox.inside(fx, fy)) { resetConfig(); return; }                       // RESET (GRAPH/GLOBAL)
+    if (imgPanelAddBox.width > 0 && imgPanelAddBox.inside(fx, fy)) { pickImagesFolder(); return; }   // ADD IMAGES (GRAPH/GLOBAL, IMAGE type)
     // ---- GRAPH sub-tabs (GLOBAL / PRESETS) + the preset list ----
     if (rightTab == 0) {
         for (int i = 0; i < 2; i++) if (graphSubBox[i].inside(fx, fy)) { if (graphSub != i) { graphSub = i; presetNaming = false; relayout(); } return; }
