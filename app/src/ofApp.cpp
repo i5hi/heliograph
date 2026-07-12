@@ -85,6 +85,11 @@ static std::string gsPresetsDir() {
     ofDirectory::createDirectory(d, false, true);
     return d;
 }
+static std::string gsImagesDir() {                       // IMAGE mode reads slideshow images from here
+    std::string d = gsHome() + "images/";
+    ofDirectory::createDirectory(d, false, true);
+    return d;
+}
 static std::string gsRecDir() {                          // default recordings: <OS videos>/HelioRecordings/
     std::string d = gsVideosDir() + "HelioRecordings/";
     ofDirectory::createDirectory(d, false, true);
@@ -258,6 +263,8 @@ void ofApp::setup() {
     ofSetEscapeQuitsApp(false);   // ESC closes the settings/help overlay — it must NOT quit the app
 
     seedUserData();               // first launch: create ~/.heliograph/ (session.json + factory presets) from bin/data
+    gsImagesDir();                // ensure ~/.heliograph/images/ exists for IMAGE mode
+    loadImages();                 // scan any images already dropped in
     loadSession();
     verifyRegistration();         // on startup: non-blocking check that we're still registered server-side
     if (!ofFile::doesFileExist(gsSessionPath())) writeSession();   // belt-and-suspenders: if no factory file shipped, persist defaults
@@ -349,7 +356,7 @@ void ofApp::buildSliders() {
     // FOREST disabled (uncomment to restore): cfgTreeLen / cfgAngle / cfgTreeOpacity / cfgSway
     // ---- LAYOUT tab (right): layout / mode / fill / falloff ----
     addChoice("Type",   &cfgLayout, {"RADIAL", "GRID"}, 0);                   // 0 Radial · 1 Grid (or press TAB)
-    addChoice("Mode",   &cfgMode,   {"ORBIT", "VEHICLE", "PLATFORM", "HELIX-S", "HELIX-D"}, 0); sliders.back().icons = true;   // ○ △ ▢ + static/dynamic helix (or 'm')
+    addChoice("Mode",   &cfgMode,   {"ORBIT", "VEHICLE", "PLATFORM", "HELIX-S", "HELIX-D", "IMAGE"}, 0); sliders.back().icons = true;   // ○ △ ▢ + static/dynamic helix + IMAGE slideshow (or 'm')
     addChoice("Fill", &cfgFill, {"OUTLINE", "FILL"}, 0); sliders.back().toggleMask = true;   // independent toggles: bit0 OUTLINE · bit1 FILL · select BOTH for fill-with-outline
     addChoice("Falloff", &cfgFalloff, {"EUCLID", "DIAMOND", "FRAME", "REVERSE"}, 0);    // taper/fade curve — both layouts (REVERSE flips the width taper)
     // ---- LEFT column: the modulatable parameters (always shown) ----
@@ -384,6 +391,21 @@ void ofApp::buildSliders() {
     add("Rate",     &cfgRate,      0, 0.99f, false, 2, 1, 0);
     add("Spread",   &cfgSpread,    0, 12,    false, 1, 1, 0);
     add("Punch",    &cfgPunch,     0, 4,     false, 1, 1, 0);   // beat/kick impact on the whole visual
+
+    // ---- IMAGE mode (show=3 → shown only when Mode = IMAGE). LAYOUT tab. ----
+    addChoice("Blend", &cfgImgBlend, {"GLOW", "SOFT"}, 3);   // GLOW = additive (dissolves into the dark bg) · SOFT = alpha + radial feather
+    add("Opacity",  &cfgImgOpacity, 0, 1,     false, 2, 0, 3);
+    add("Feather",  &cfgImgFeather, 0, 1,     false, 2, 0, 3);   // SOFT edge dissolve
+    add("Img Scale",&cfgImgScale,   0.3f, 3,  false, 2, 0, 3);
+    add("Pan X",    &cfgImgPanX,   -1, 1,     false, 2, 0, 3);
+    add("Pan Y",    &cfgImgPanY,   -1, 1,     false, 2, 0, 3);
+    add("Rotate",   &cfgImgRot,    -180, 180, false, 0, 0, 3);
+    add("Ken Burns",&cfgImgKen,     0, 1,     false, 2, 0, 3);   // slow zoom/pan drift per image
+    add("Bright",   &cfgImgBright,  0, 2,     false, 2, 0, 3);
+    add("Tint",     &cfgImgTint,    0, 1,     false, 2, 0, 3);   // 0 own colour .. 1 channel accent
+    add("Hold",     &cfgImgInterval,2, 30,    false, 1, 0, 3);   // seconds per image
+    add("Fade",     &cfgImgTrans,   0.2f, 5,  false, 1, 0, 3);   // crossfade duration
+    add("Reactive", &cfgImgAudio,   0, 1,     false, 2, 0, 3);   // audio-reactive pulse
 
     relayout();
 }
@@ -434,8 +456,12 @@ void ofApp::applyMods() {
 }
 
 bool ofApp::sliderVisible(const Slider& s) {
+    bool imageMode = cfgMode >= 4.5f;            // IMAGE is the last Mode option
+    if (s.val == &cfgMode) return true;          // the Mode selector is ALWAYS available (so you can switch back)
+    if (s.show == 3) return imageMode;           // IMAGE-only controls
+    if (imageMode) return false;                 // in IMAGE mode, hide all the visualizer params
     if (s.show == 0) return true;
-    if (s.show == 1) return cfgLayout < 0.5f;   // radial-only
+    if (s.show == 1) return cfgLayout < 0.5f;    // radial-only
     return cfgLayout >= 0.5f;                    // grid-only
 }
 
@@ -604,6 +630,14 @@ void ofApp::computeFFT(const std::vector<float>& in, std::vector<float>& outMag)
 void ofApp::update() {
     float dt = std::min(ofGetLastFrameTime(), 0.05);
     t += dt;
+    // IMAGE mode: rescan the folder on entry, drive the crossfade + auto-advance timer.
+    bool imgActive = cfgMode >= 4.5f;
+    if (imgActive && !imgWasActive) loadImages();          // entering IMAGE mode → pick up newly-dropped files
+    imgWasActive = imgActive;
+    if (imgActive && imgList.size() > 0) {
+        if (imgFade < 1.0f) imgFade = std::min(1.0f, imgFade + dt / std::max(0.1f, cfgImgTrans));   // advance the crossfade
+        if (imgList.size() > 1 && (t - imgHoldT) > cfgImgInterval) imageAdvance(1);                 // auto-advance
+    }
     std::vector<float> w(N);
     { std::lock_guard<std::mutex> lock(mtx); for (int i = 0; i < N; i++) w[i] = ringBuf[(writePos + i) % N]; }
     computeFFT(w, spectrum);
@@ -1060,9 +1094,116 @@ void ofApp::drawForest() {
     ofSetLineWidth(1.0f);
 }
 
+// ---- IMAGE mode ------------------------------------------------------------------------------------
+// A slideshow that lives INSIDE the scene FBO (so it records + broadcasts). Drop images into
+// ~/.heliograph/images/. GLOW blend makes dark image regions dissolve into the deep-space background
+// (bright parts glow); SOFT blend feathers the rectangle edges into the bg with a radial alpha mesh.
+void ofApp::loadImages() {
+    imgList.clear();
+    ofDirectory dir(gsImagesDir());
+    dir.allowExt("png"); dir.allowExt("jpg"); dir.allowExt("jpeg"); dir.allowExt("gif"); dir.allowExt("bmp");
+    dir.listDir(); dir.sort();
+    for (size_t i = 0; i < dir.size(); i++) {
+        ofImage im;
+        if (im.load(dir.getPath(i))) { im.setUseTexture(true); imgList.push_back(im); }
+    }
+    imgCur = imgPrev = 0; imgFade = 1.0f; imgHoldT = t; imgKenSeed = ofRandom(1000);
+    ofLogNotice() << "IMAGE mode: loaded " << imgList.size() << " image(s) from " << gsImagesDir();
+}
+
+// Draw one image, fit-to-cover the frame, with optional radial feather (SOFT) or plain quad (GLOW).
+void ofApp::drawImageTex(ofImage& im, float cx, float cy, float fw, float fh, float ang, float alpha, bool soft, float feather, const ofColor& tint) {
+    if (!im.isAllocated() || alpha <= 0.001f) return;
+    float iw = im.getWidth(), ih = im.getHeight();
+    if (iw < 1 || ih < 1) return;
+    float cover = std::max(fw / iw, fh / ih);                 // cover the frame, preserve aspect
+    float w = iw * cover, h = ih * cover;
+    ofPushMatrix();
+    ofTranslate(cx, cy);
+    ofRotateZDeg(ang);
+    ofSetColor(tint, (int)ofClamp(alpha * 255.0f, 0, 255));
+    ofTexture& tex = im.getTexture();
+    tex.bind();
+    if (!soft) {                                              // plain quad — GLOW/additive does the blending
+        ofMesh q; q.setMode(OF_PRIMITIVE_TRIANGLE_STRIP);
+        float hw = w * 0.5f, hh = h * 0.5f, tw = im.getWidth(), th = im.getHeight();
+        q.addVertex({-hw, -hh, 0}); q.addTexCoord({0, 0});
+        q.addVertex({ hw, -hh, 0}); q.addTexCoord({tw, 0});
+        q.addVertex({-hw,  hh, 0}); q.addTexCoord({0, th});
+        q.addVertex({ hw,  hh, 0}); q.addTexCoord({tw, th});
+        q.draw();
+    } else {                                                  // radial-alpha grid → feathered oval that dissolves into the bg
+        const int N = 16;
+        ofMesh m; m.setMode(OF_PRIMITIVE_TRIANGLES);
+        float tw = im.getWidth(), th = im.getHeight();
+        float inner = 1.0f - ofClamp(feather, 0, 0.98f);      // radius (0..1) where the fade begins
+        for (int gy = 0; gy <= N; gy++) for (int gx = 0; gx <= N; gx++) {
+            float u = gx / (float)N, v = gy / (float)N;
+            float px = (u - 0.5f) * w, py = (v - 0.5f) * h;
+            float r = std::min(1.0f, sqrtf((u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f)) * 2.0f);
+            float a = 1.0f - ofClamp((r - inner) / std::max(0.001f, 1.0f - inner), 0, 1);   // 1 at centre → 0 at edge
+            a = a * a * (3 - 2 * a);                           // smoothstep
+            m.addVertex({px, py, 0}); m.addTexCoord({u * tw, v * th});
+            m.addColor(ofColor(tint, (int)ofClamp(alpha * a * 255.0f, 0, 255)));
+        }
+        auto idx = [&](int x, int y){ return y * (N + 1) + x; };
+        for (int gy = 0; gy < N; gy++) for (int gx = 0; gx < N; gx++) {
+            m.addIndex(idx(gx, gy));   m.addIndex(idx(gx + 1, gy));   m.addIndex(idx(gx, gy + 1));
+            m.addIndex(idx(gx + 1, gy)); m.addIndex(idx(gx + 1, gy + 1)); m.addIndex(idx(gx, gy + 1));
+        }
+        m.draw();
+    }
+    tex.unbind();
+    ofPopMatrix();
+}
+
+void ofApp::imageAdvance(int dir) {
+    if (imgList.size() < 2) return;
+    imgPrev = imgCur;
+    imgCur = ((imgCur + dir) % (int)imgList.size() + (int)imgList.size()) % (int)imgList.size();
+    imgFade = 0.0f; imgHoldT = t; imgKenSeed = ofRandom(1000);
+}
+
+void ofApp::drawImageMode() {
+    float W = RW - 2 * fm, H = RH - 2 * fm, cx = RW * 0.5f, cy = RH * 0.5f;
+    if (imgList.empty()) {                                    // empty-folder hint (screen-only feel, but drawn in-frame)
+        ofSetColor(150, 156, 154);
+        std::string h1 = "IMAGE MODE";
+        std::string h2 = "drop images into  ~/.heliograph/images/  then press  I  to reload";
+        fTitle.drawString(h1, cx - fTitle.stringWidth(h1) * 0.5f, cy - 10 * S);
+        fUI.drawString(h2, cx - fUI.stringWidth(h2) * 0.5f, cy + 24 * S);
+        return;
+    }
+    // Ken Burns: slow zoom + drift over the hold, varied per image via imgKenSeed.
+    float held = t - imgHoldT;
+    float kb   = cfgImgKen * 0.12f;
+    float zoom = 1.0f + kb * (0.5f + 0.5f * sinf(held * 0.15f + imgKenSeed));
+    float driftX = kb * 60 * S * sinf(held * 0.11f + imgKenSeed * 1.7f);
+    float driftY = kb * 40 * S * cosf(held * 0.09f + imgKenSeed * 2.3f);
+    // Audio-reactive pulse on opacity + scale.
+    float pulse = 1.0f + cfgImgAudio * level;
+    float baseA = ofClamp(cfgImgOpacity, 0, 1) * ofClamp(pulse, 0, 1.6f);
+    float scale = cfgImgScale * zoom * (1.0f + cfgImgAudio * level * 0.15f);
+    float panX  = cfgImgPanX * W * 0.5f + driftX;
+    float panY  = cfgImgPanY * H * 0.5f + driftY;
+    bool  soft  = cfgImgBlend >= 0.5f;
+    ofEnableBlendMode(soft ? OF_BLENDMODE_ALPHA : OF_BLENDMODE_ADD);
+    // Brightness + optional tint toward the channel accent.
+    float br = ofClamp(cfgImgBright, 0, 2);
+    ofColor own(ofClamp(255 * br, 0, 255), ofClamp(255 * br, 0, 255), ofClamp(255 * br, 0, 255));
+    ofColor tinted = own.getLerped(ofColor(cNeon.r * br, cNeon.g * br, cNeon.b * br), ofClamp(cfgImgTint, 0, 1));
+    float fw = W * scale, fh = H * scale;
+    // Crossfade: outgoing fades out, incoming fades in.
+    if (imgFade < 1.0f && imgPrev != imgCur)
+        drawImageTex(imgList[imgPrev], cx + panX, cy + panY, fw, fh, cfgImgRot, baseA * (1.0f - imgFade), soft, cfgImgFeather, tinted);
+    drawImageTex(imgList[imgCur], cx + panX, cy + panY, fw, fh, cfgImgRot, baseA * imgFade, soft, cfgImgFeather, tinted);
+    ofEnableBlendMode(OF_BLENDMODE_ALPHA);
+}
+
 void ofApp::drawScene() {
     drawSpace();
     drawStars();
+    if (cfgMode >= 4.5f) { drawImageMode(); return; }   // IMAGE mode replaces the portal visualizer
     ofEnableBlendMode(OF_BLENDMODE_ADD);
     drawPortal();
     ofEnableBlendMode(OF_BLENDMODE_ALPHA);
@@ -1312,6 +1453,11 @@ void ofApp::drawPanels() {
                     if (i == 0) ofDrawCircle(cx, cy, r);
                     else if (i == 1) { ofBeginShape(); for (int k = 0; k < 3; k++) { float a = TWO_PI * k / 3 - HALF_PI; ofVertex(cx + cosf(a) * r * 1.12f, cy + sinf(a) * r * 1.12f); } ofEndShape(true); }
                     else if (i == 2) { float h2 = r * 0.92f; ofDrawRectangle(cx - h2, cy - h2, h2 * 2, h2 * 2); }
+                    else if (i == 5) {                                              // IMAGE — a picture glyph (frame + sun + mountain)
+                        ofNoFill(); ofSetLineWidth(1.4f * S); ofDrawRectangle(cx - r, cy - r * 0.82f, r * 2, r * 1.64f);
+                        ofFill(); ofDrawCircle(cx - r * 0.42f, cy - r * 0.34f, r * 0.22f);
+                        ofBeginShape(); ofVertex(cx - r * 0.85f, cy + r * 0.7f); ofVertex(cx - r * 0.05f, cy - r * 0.05f); ofVertex(cx + r * 0.9f, cy + r * 0.7f); ofEndShape(true);
+                    }
                     else {
                         ofNoFill(); ofSetLineWidth(1.6f * S);
                         ofPolyline pa, pb; int K = 16;
@@ -1987,7 +2133,8 @@ void ofApp::drawHelp() {
         {"S", "settings (session / routing / register / channel)"},
         {"R", "record — local capture only"},
         {"B", "broadcast + record (needs a server login)"},
-        {"M", "cycle mode (orbit / vehicle / platform)"},
+        {"M", "cycle mode (orbit / vehicle / platform / helix / image)"},
+        {"< >", "IMAGE mode: previous / next image"},
         {"TAB", "toggle layout (radial / grid)"},
         {"X", "reset all settings to defaults"},
         {"U", "show / hide the broadcast HUD"},
@@ -2473,6 +2620,8 @@ void ofApp::keyPressed(int key) {
     else if (key == 'm' || key == 'M') {                                         // cycle modes (count comes from the Mode options — add a mode without touching this)
         for (auto& sl : sliders) if (sl.val == &cfgMode && !sl.opts.empty()) { cfgMode = fmodf(cfgMode + 1.0f, (float)sl.opts.size()); break; }
     }
+    else if (key == OF_KEY_LEFT  && cfgMode >= 4.5f) imageAdvance(-1);           // IMAGE mode: previous image
+    else if (key == OF_KEY_RIGHT && cfgMode >= 4.5f) imageAdvance(+1);           // IMAGE mode: next image
     else if (key == OF_KEY_TAB)        cfgLayout = (cfgLayout < 0.5f) ? 1 : 0;   // toggle RADIAL / GRID
     else if (key == 'x' || key == 'X') resetConfig();                            // reset to init settings
     else if (key == 'p' || key == 'P') ofSaveScreen(gsScratch("heliograph_frame.png"));   // screenshot (moved off 'S', now settings)

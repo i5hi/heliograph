@@ -175,6 +175,30 @@ public:
     float cfgFalloff = 0;                    // line-width taper curve: 0 EUCLID · 1 DIAMOND · 2 FRAME
     float cfgGlow    = 0.5f;                  // radial bloom: additive glow halo around the lines (0 = off)
     int   lastLayout = -1;
+    // ---- IMAGE mode (cfgMode == IMAGE): a slideshow that blends into the deep-space background ----
+    float cfgImgOpacity  = 1.0f;   // overall image opacity 0..1
+    float cfgImgBlend    = 0;      // 0 GLOW (additive — dark vanishes, bright glows into the bg) · 1 SOFT (alpha + radial feather)
+    float cfgImgFeather  = 0.45f;  // SOFT: radial edge feather (0 hard rect .. 1 fully oval-dissolved into bg)
+    float cfgImgScale    = 1.0f;   // manual zoom on top of fit-to-frame
+    float cfgImgPanX     = 0;      // manual pan (fraction of frame)
+    float cfgImgPanY     = 0;
+    float cfgImgRot      = 0;      // manual rotation (deg)
+    float cfgImgKen      = 0.5f;   // Ken Burns amount — slow zoom/pan drift per image (0 = still)
+    float cfgImgBright   = 1.0f;   // brightness 0..2
+    float cfgImgTint     = 0;      // 0 = image's own colour .. 1 = fully tinted to the channel accent (cNeon)
+    float cfgImgInterval = 8.0f;   // seconds each image is held before advancing
+    float cfgImgTrans    = 1.5f;   // crossfade duration (s)
+    float cfgImgAudio    = 0.3f;   // audio-reactive opacity/scale pulse amount (0 = static)
+    std::vector<ofImage> imgList;  // loaded from ~/.heliograph/images/
+    int    imgCur = 0, imgPrev = 0;       // current + outgoing (during a crossfade) indices
+    float  imgFade = 1.0f;                // crossfade progress: 1 = settled on imgCur
+    float  imgHoldT = 0;                  // t of the last advance (drives auto-advance)
+    float  imgKenSeed = 0;                // per-image random seed so the Ken Burns drift varies
+    bool   imgWasActive = false;          // edge-detect entering IMAGE mode (to auto-rescan the folder)
+    void   loadImages();                  // (re)scan ~/.heliograph/images/
+    void   drawImageMode();               // draw the slideshow into the scene FBO
+    void   drawImageTex(ofImage& im, float cx, float cy, float fw, float fh, float ang, float alpha, bool soft, float feather, const ofColor& tint);
+    void   imageAdvance(int dir);         // step to prev/next image (starts a crossfade)
     void  relayout();
     void  drawGrid();
     bool  sliderVisible(const Slider& s);

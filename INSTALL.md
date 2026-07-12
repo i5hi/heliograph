@@ -73,6 +73,7 @@ Open heliograph and press **`H`** any time for the full key list. The essentials
 | **R** | **record** locally (MP4) |
 | **B** | **broadcast** live (also records) — needs a server account |
 | **V** | on-screen audio level meter (never recorded) |
+| **M** | cycle visual mode (orbit / vehicle / platform / helix / **image**) |
 | **F** | fullscreen |
 | **P** | save a screenshot |
 
@@ -80,6 +81,11 @@ Open heliograph and press **`H`** any time for the full key list. The essentials
 (the SIGNAL meter jumps when audio is coming through). heliograph visualizes whatever is on that input.
 
 **Record:** press **`R`**. Recordings are saved to your Videos folder — no account needed.
+
+**Image mode:** press **`M`** to cycle to **IMAGE**. Drop images (png/jpg) into **`~/.heliograph/images/`**,
+switch into IMAGE mode to load them, and it plays a slow crossfading slideshow that blends into the
+deep-space background. **`←` / `→`** step between images; the control panel (`C`) has blend (GLOW/SOFT),
+feather, ken-burns, opacity, scale/pan/rotate, brightness, tint, hold/fade timing, and audio-reactivity.
 
 ---
 
