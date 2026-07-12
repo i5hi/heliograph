@@ -1192,14 +1192,8 @@ void ofApp::imageGoto(int idx) {
 
 void ofApp::drawImageMode() {
     float W = RW - 2 * fm, H = RH - 2 * fm, cx = RW * 0.5f, cy = RH * 0.5f;
-    if (imgList.empty()) {                                    // empty-folder hint (drawn in-frame — only shows with no images)
-        ofSetColor(150, 156, 154);
-        std::string h1 = "IMAGE";
-        std::string h2 = "click  + ADD IMAGES  below to choose a folder of pictures";
-        fTitle.drawString(h1, cx - fTitle.stringWidth(h1) * 0.5f, cy - 10 * S);
-        fUI.drawString(h2, cx - fUI.stringWidth(h2) * 0.5f, cy + 24 * S);
-        return;
-    }
+    if (imgList.empty()) return;   // no images → recorded scene stays clean (just the background); the
+                                   // "add a folder" hint is drawn SCREEN-ONLY in draw(), never captured
     // Ken Burns: slow zoom + drift over the hold, varied per image via imgKenSeed.
     float held = t - imgHoldT;
     float kb   = cfgImgKen * 0.12f;
@@ -1303,7 +1297,16 @@ void ofApp::draw() {
     if (settingsOpen)   drawSettings();    // 'e' — edit session content
     else if (showPanel) drawPanels();      // 'g' — config panel
     if (helpMode && showPanel && !settingsOpen) drawParamHelp();   // 'i' — hover-help over the live controls
-    if (cfgLayout >= 1.5f && !settingsOpen) drawImageBar();   // IMAGE type: screen-only carousel + ADD button (never recorded)
+    if (cfgLayout >= 1.5f && !settingsOpen) {                 // IMAGE type: screen-only carousel + empty-state hint (never recorded)
+        if (imgList.empty()) {                                // guidance shown to the artist only — kept out of the recorded frame
+            ofSetColor(150, 156, 154);
+            std::string h1 = "IMAGE";
+            std::string h2 = "open the control panel (C) and click  + ADD IMAGES  to choose a folder";
+            fTitle.drawString(h1, RW * 0.5f - fTitle.stringWidth(h1) * 0.5f, RH * 0.5f - 10 * S);
+            fUI.drawString(h2, RW * 0.5f - fUI.stringWidth(h2) * 0.5f, RH * 0.5f + 24 * S);
+        }
+        drawImageBar();
+    }
     if (showHelp)       drawHelp();        // 'h' — shortcuts overlay
     ofPopMatrix();
 
