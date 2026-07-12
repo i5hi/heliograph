@@ -1123,6 +1123,15 @@ void ofApp::loadImages() {
     ofLogNotice() << "IMAGE: loaded " << imgList.size() << " image(s) from " << folder;
 }
 
+// CLEAR: drop every loaded image and forget the chosen folder, so ADD IMAGES starts from a clean slate.
+void ofApp::clearImages() {
+    imgList.clear();
+    imgCur = imgPrev = 0; imgFade = 1.0f; imgHoldT = t;
+    sImgDir = "";
+    writeSession();
+    ofLogNotice() << "IMAGE: cleared all loaded images";
+}
+
 bool ofApp::pickImagesFolder() {                               // native folder chooser -> use that folder as the image source
     std::string start = (!sImgDir.empty()) ? sImgDir : gsImagesDir();
     ofFileDialogResult r = ofSystemLoadDialog("Choose a folder of images", true, start);
@@ -1574,7 +1583,7 @@ void ofApp::drawPanels() {
     float contentBottom = tby + tbh;
     presetAddBox = presetNameBox = ofRectangle(-99999, -99999, 0, 0);
     graphSubBox[0] = graphSubBox[1] = ofRectangle(-99999, -99999, 0, 0);
-    camPadBox = camZBox = imgPanelAddBox = ofRectangle(-99999, -99999, 0, 0);
+    camPadBox = camZBox = imgPanelAddBox = imgPanelClearBox = ofRectangle(-99999, -99999, 0, 0);
     presetBox.clear(); presetDelBox.clear();
     if (rightTab == 0) {                                     // GRAPH: GLOBAL / PRESETS sub-tabs
         float subG = 8 * S, subW = (rw - subG) * 0.5f, subY = fm + 162 * S;   // sub-tab sits just under the GRAPH/AUDIO/MOD tab bar
@@ -1582,8 +1591,10 @@ void ofApp::drawPanels() {
         graphSubBox[1] = ofRectangle(rx + subW + subG, subY, subW, 30 * S);
         if (graphSub == 0) {                                 // GLOBAL: choices + camera-angle pad + RESET
             for (auto& s : sliders) if (s.tab == 0 && sliderVisible(s)) contentBottom = std::max(contentBottom, s.track.y + s.track.height);
-            if (cfgLayout >= 1.5f) {                          // IMAGE type: ADD IMAGES button under the Type selector (camera pad is irrelevant here)
-                imgPanelAddBox = ofRectangle(rx, contentBottom + 34 * S, rw, 44 * S);
+            if (cfgLayout >= 1.5f) {                          // IMAGE type: ADD + CLEAR buttons under the Type selector (camera pad is irrelevant here)
+                float bg = 8 * S, bw = (rw - bg) * 0.5f, byy = contentBottom + 34 * S;
+                imgPanelAddBox   = ofRectangle(rx, byy, bw, 44 * S);
+                imgPanelClearBox = ofRectangle(rx + bw + bg, byy, bw, 44 * S);
                 contentBottom = imgPanelAddBox.getMaxY();
             } else {
                 float padSz = 116 * S, padY = contentBottom + 36 * S;
@@ -1657,6 +1668,7 @@ void ofApp::drawPanels() {
                 fUI.drawString(imgList.empty() ? "no images yet — add a folder" : ofToString(imgList.size()) + " image" + (imgList.size() == 1 ? "" : "s") + " loaded",
                                imgPanelAddBox.x, imgPanelAddBox.y - 10 * S);
                 chip(imgPanelAddBox, "+  ADD IMAGES", false);
+                chip(imgPanelClearBox, "CLEAR", false);
             } else {
             // ---- camera angle: XY pad (X = vertical, Y = horizontal) + Z roll slider ----
             ofSetColor(158, 164, 162); fUI.drawString("Camera Angle  (drag)", camPadBox.x, camPadBox.y - 8 * S);
@@ -2775,6 +2787,7 @@ void ofApp::mousePressed(int x, int y, int button) {
     for (int i = 0; i < 3; i++) if (tabBox[i].inside(fx, fy)) { if (rightTab != i) { rightTab = i; modPickKind = -1; presetNaming = false; relayout(); } return; }
     if (resetBox.inside(fx, fy)) { resetConfig(); return; }                       // RESET (GRAPH/GLOBAL)
     if (imgPanelAddBox.width > 0 && imgPanelAddBox.inside(fx, fy)) { pickImagesFolder(); return; }   // ADD IMAGES (GRAPH/GLOBAL, IMAGE type)
+    if (imgPanelClearBox.width > 0 && imgPanelClearBox.inside(fx, fy)) { clearImages(); return; }     // CLEAR loaded images
     // ---- GRAPH sub-tabs (GLOBAL / PRESETS) + the preset list ----
     if (rightTab == 0) {
         for (int i = 0; i < 2; i++) if (graphSubBox[i].inside(fx, fy)) { if (graphSub != i) { graphSub = i; presetNaming = false; relayout(); } return; }

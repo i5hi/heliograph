@@ -195,6 +195,8 @@ public:
     bool   imgBarOpen = true;      // the bottom thumbnail carousel — default shown, toggle to hide
     ofRectangle imgAddBox;         // "ADD IMAGES" (folder picker) button
     ofRectangle imgPanelAddBox;    // right control panel: ADD IMAGES button, under the Type selector (IMAGE type)
+    ofRectangle imgPanelClearBox;  // right control panel: CLEAR button (empties the loaded set), beside ADD
+    void   clearImages();          // drop every loaded image + forget the source folder
     ofRectangle imgBarToggle;      // collapse/expand handle for the carousel
     std::vector<ofRectangle> imgThumbBox;   // per-image thumbnail hit rects
     bool   pickImagesFolder();     // native folder chooser -> sImgDir -> reload
