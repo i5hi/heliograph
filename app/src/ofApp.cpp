@@ -4,6 +4,12 @@
 #include <cstdlib>
 #include <algorithm>
 #include <chrono>
+#include <thread>
+#ifndef _WIN32
+  #include <unistd.h>    // write()
+  #include <fcntl.h>     // fcntl() O_NONBLOCK — non-blocking broadcast pipe
+  #include <cerrno>      // errno / EAGAIN
+#endif
 #include "ofAppGLFWWindow.h"
 #include <GLFW/glfw3.h>
 
@@ -721,15 +727,40 @@ void ofApp::update() {
         else if (recording && t > 5.5f) { stopRecording(); didRecTest = true; autoRecTest = false; }
     }
 
-    // BROADCAST — drain audioIn()'s queue into the live icecast pipe here (main thread), never on the
-    // audio callback thread: ffmpeg/network can stall or die without ever blocking real-time audio capture.
+    // BROADCAST — move audioIn()'s queued PCM into a main-thread backlog, then write to the icecast pipe
+    // WITHOUT blocking. A blocking write here froze the whole UI when Icecast stalled (ffmpeg stops
+    // draining its stdin → the pipe fills → write() blocks forever on the main thread).
     if (broadcasting && icePipe) {
-        std::vector<short> chunk;
-        { std::lock_guard<std::mutex> lock(mtx); chunk.swap(broadcastAudioQueue); }
-        if (!chunk.empty() && fwrite(chunk.data(), sizeof(short), chunk.size(), icePipe) < chunk.size()) {
-            ofLogError() << "BROADCAST: ffmpeg pipe write failed (connection dropped?) — stopping";
-            stopBroadcast();
+        { std::lock_guard<std::mutex> lock(mtx);
+          if (!broadcastAudioQueue.empty()) {
+            const char* b = reinterpret_cast<const char*>(broadcastAudioQueue.data());
+            iceOutBuf.insert(iceOutBuf.end(), b, b + broadcastAudioQueue.size() * sizeof(short));
+            broadcastAudioQueue.clear();
+          }
         }
+        // Bound the backlog (~8s): if the connection is stalling, drop the oldest audio rather than grow
+        // unbounded. A genuinely dead ffmpeg surfaces as a write error (EPIPE) below and stops the broadcast.
+        const size_t CAP = (size_t)sampleRate * std::max(1, recChannels) * sizeof(short) * 8;
+        if (iceOutBuf.size() > CAP) iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.end() - CAP);
+#ifndef _WIN32
+        size_t off = 0;
+        while (iceFd >= 0 && off < iceOutBuf.size()) {
+            ssize_t n = ::write(iceFd, iceOutBuf.data() + off, iceOutBuf.size() - off);
+            if (n > 0) { off += (size_t)n; continue; }
+            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;   // pipe full — resume next tick, UI never blocks
+            ofLogError() << "BROADCAST: pipe write failed (connection dropped?) — stopping";
+            stopBroadcast(); off = 0; break;
+        }
+        if (off) iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.begin() + off);
+#else
+        // Windows _popen lacks a simple non-blocking mode; write in one shot (rare platform for this use).
+        if (!iceOutBuf.empty()) {
+            if (fwrite(iceOutBuf.data(), 1, iceOutBuf.size(), icePipe) < iceOutBuf.size()) {
+                ofLogError() << "BROADCAST: pipe write failed — stopping"; stopBroadcast();
+            }
+            iceOutBuf.clear();
+        }
+#endif
     }
     if (broadcasting && (t - lastSnapshotT) > SNAPSHOT_INTERVAL) { pushSnapshot(); lastSnapshotT = t; }
     if (broadcasting && (t - lastStreamTsT) > 1.0f) { pushStreamTimestamp(); lastStreamTsT = t; }
@@ -2435,18 +2466,28 @@ void ofApp::startRecording() {
 void ofApp::stopRecording() {
     if (!recording) return;
     recording = false;
-    if (vidPipe) { GS_PCLOSE(vidPipe); vidPipe = nullptr; }
-    std::string b = recFinalPath.substr(0, recFinalPath.size() - 4);
-    std::string vidTmp = b + ".video.mp4", log = gsScratch("gs_ffmpeg.log");
-    std::string wavTmp = gsScratch("heliograph_rec_audio.wav");   // scratch only — muxed in, then deleted (no separate WAV kept)
-    { std::lock_guard<std::mutex> lock(mtx); writeWav(wavTmp, recAudio, recChannels, sampleRate); }
-    // mux video + audio into ONE MP4 (AAC 320k), then drop both temporaries
-    std::string mux = gsFFmpeg() + " -y -i \"" + vidTmp + "\" -i \"" + wavTmp +
-        "\" -c:v copy -c:a aac -b:a 320k -shortest \"" + recFinalPath + "\" 2>>\"" + log + "\"";
-    system(mux.c_str());
-    ofFile::removeFile(vidTmp);   // portable cleanup (no shell 'rm')
-    ofFile::removeFile(wavTmp);
-    ofLogNotice() << "REC saved -> " << recFinalPath;
+    // Hand everything off and FINALIZE ON A BACKGROUND THREAD. The mux was a synchronous system() call
+    // on the main thread — it froze the whole UI for the length of the recording (and, while broadcasting,
+    // backed up the live pipe until it blocked too). The UI now stays responsive; the MP4 lands a moment later.
+    FILE* vp = vidPipe; vidPipe = nullptr;
+    std::string finalPath = recFinalPath;
+    std::vector<short> audio;
+    { std::lock_guard<std::mutex> lock(mtx); audio.swap(recAudio); }   // take the buffer under lock; do NOT hold it during I/O
+    int chans = recChannels, rate = sampleRate;
+    std::thread([vp, finalPath, audio = std::move(audio), chans, rate]() mutable {
+        if (vp) GS_PCLOSE(vp);                                         // flush + wait for the video encoder to finish
+        std::string base = finalPath.substr(0, finalPath.size() - 4);
+        std::string vidTmp = base + ".video.mp4";
+        std::string wavTmp = base + ".audio.wav";                      // per-recording temp — no shared-scratch collision
+        std::string log = gsScratch("gs_ffmpeg.log");
+        writeWav(wavTmp, audio, chans, rate);
+        std::string mux = gsFFmpeg() + " -y -i \"" + vidTmp + "\" -i \"" + wavTmp +
+            "\" -c:v copy -c:a aac -b:a 320k -shortest \"" + finalPath + "\" 2>>\"" + log + "\"";
+        system(mux.c_str());
+        ofFile::removeFile(vidTmp);   // portable cleanup (no shell 'rm')
+        ofFile::removeFile(wavTmp);
+        ofLogNotice() << "REC saved -> " << finalPath;
+    }).detach();
 }
 
 //--------------------------------------------------------------
@@ -2474,23 +2515,27 @@ void ofApp::startBroadcast() {
         " -i - -c:a libmp3lame -b:a 320k -f mp3 -content_type audio/mpeg " + gsShQuote(url) + " >>" + gsShQuote(log) + " 2>&1";
     icePipe = GS_POPEN(cmd.c_str(), GS_PIPEMODE);
     if (!icePipe) { ofLogError() << "BROADCAST: failed to launch ffmpeg"; return; }
+    iceOutBuf.clear();
+#ifndef _WIN32
+    // Make the pipe non-blocking: if Icecast stalls, ffmpeg stops draining stdin and a blocking write
+    // would hang the main thread (UI freeze). Non-blocking lets update() write what fits and move on.
+    iceFd = fileno(icePipe);
+    if (iceFd >= 0) { int fl = fcntl(iceFd, F_GETFL, 0); if (fl != -1) fcntl(iceFd, F_SETFL, fl | O_NONBLOCK); }
+#endif
     broadcasting = true;
     broadcastStart = t;
     lastSnapshotT = -100;   // push a snapshot on the very next update() tick
-    // B is B AND R: broadcasting always records a local copy too. If a manual recording is already
-    // running we leave it; otherwise we start one and remember to stop it when broadcasting ends.
-    if (!recording) { startRecording(); recStartedByBroadcast = true; }
+    // B and R are INDEPENDENT: broadcasting never touches local recording. Press R to also record.
     ofLogNotice() << "BROADCAST start -> " << sIceHost << ":" << port << "/" << mount;
 }
 
 void ofApp::stopBroadcast() {
     if (!broadcasting) return;
     broadcasting = false;
+    iceFd = -1; iceOutBuf.clear();
     if (icePipe) { GS_PCLOSE(icePipe); icePipe = nullptr; }
     { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
-    // If broadcasting started the recording (not the artist via R), stop it too.
-    if (recStartedByBroadcast && recording) stopRecording();
-    recStartedByBroadcast = false;
+    // Recording is independent — a manual recording (R) keeps running if the artist started one.
     ofLogNotice() << "BROADCAST stop";
 }
 

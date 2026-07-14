@@ -71,7 +71,7 @@ Open heliograph and press **`H`** any time for the full key list. The essentials
 | **C** | show / hide the control panels |
 | **S** | settings (session · routing · register · channel) |
 | **R** | **record** locally (MP4) |
-| **B** | **broadcast** live (also records) — needs a server account |
+| **B** | **broadcast** live (independent of record) — needs a server account |
 | **V** | on-screen audio level meter (never recorded) |
 | **M** | cycle visual mode (orbit / vehicle / platform / helix / **image**) |
 | **F** | fullscreen |

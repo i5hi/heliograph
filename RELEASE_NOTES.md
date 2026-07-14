@@ -38,8 +38,8 @@ that listeners tune into from their browser.
   `TAB` toggles RADIAL ↔ GRID. To broadcast your computer's own sound, route it through a virtual audio
   channel (BlackHole / PulseAudio monitor / VB-CABLE — see INSTALL §6).
 - **Record** (`R`) — a single 1440p MP4 to your Videos folder. No account needed.
-- **Broadcast** (`B`) — go live to a heliod station (audio + a visual feed). Broadcasting also records a
-  local copy. Requires a **single-use registration token** from the station admin.
+- **Broadcast** (`B`) — go live to a heliod station (audio + a visual feed). **Independent of recording** —
+  press `R` too if you also want a local MP4. Requires a **single-use registration token** from the station admin.
 - **Brand your channel** (`S → CHANNEL`) — channel name, UI font, accent colour, and **donation
   addresses** (Lightning / Bitcoin `bc1` / Liquid `lq1`) that appear on the listener's player. Address
   fields stay locked until you confirm **Wallet Backed Up = YES**.
@@ -48,7 +48,7 @@ that listeners tune into from their browser.
 
 ## Shortcuts
 
-`C` panels · `S` settings · `R` record · `B` broadcast (+record) · `V` level meter · `M` mode ·
+`C` panels · `S` settings · `R` record · `B` broadcast · `V` level meter · `M` mode ·
 `TAB` layout (RADIAL/GRID) · `←/→` step image (IMAGE) · `U` HUD · `T` telemetry · `F` fullscreen ·
 `P` screenshot · `H` help · `X` reset
 

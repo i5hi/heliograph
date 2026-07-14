@@ -45,9 +45,10 @@ public:
 
     // ---- broadcast (live Icecast forwarding + snapshot push, BROADCAST section of the settings editor) ----
     FILE*  icePipe = nullptr;                     // ffmpeg subprocess piping PCM -> icecast:// (live, independent of local recording)
-    std::vector<short> broadcastAudioQueue;       // PCM queued by audioIn() (audio thread), drained + piped by update() (main thread)
+    int    iceFd = -1;                            // icePipe's fd, set non-blocking so a stalled connection never freezes the UI
+    std::vector<char> iceOutBuf;                  // main-thread backlog of PCM bytes not yet accepted by the (non-blocking) pipe
+    std::vector<short> broadcastAudioQueue;       // PCM queued by audioIn() (audio thread), drained by update() (main thread)
     bool   broadcasting = false;
-    bool   recStartedByBroadcast = false;   // B auto-started the recording (so stopping B stops that recording; a manual R recording is left alone)
     float  broadcastStart = 0;                    // t when startBroadcast() ran — drives the ON AIR elapsed-time readout
     std::string sIceHost = "", sIcePort = "8000", sIceMount = "live.mp3", sIcePassword = "";
     std::string sSnapshotUrl = "", sSnapshotToken = "";
