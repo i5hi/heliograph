@@ -2533,7 +2533,12 @@ void ofApp::stopBroadcast() {
     if (!broadcasting) return;
     broadcasting = false;
     iceFd = -1; iceOutBuf.clear();
-    if (icePipe) { GS_PCLOSE(icePipe); icePipe = nullptr; }
+    // Reap the ffmpeg pipe OFF the main thread: pclose() waits for ffmpeg to exit, and if it's wedged on
+    // a stalled Icecast socket that never happens — a synchronous close here froze the UI on stop. The
+    // detached reaper closes the fd (EOF → ffmpeg finishes, or Icecast times out the source) without
+    // ever blocking the UI.
+    FILE* p = icePipe; icePipe = nullptr;
+    if (p) std::thread([p]{ GS_PCLOSE(p); }).detach();
     { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
     // Recording is independent — a manual recording (R) keeps running if the artist started one.
     ofLogNotice() << "BROADCAST stop";
