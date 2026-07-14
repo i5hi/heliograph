@@ -1222,7 +1222,10 @@ void ofApp::imageGoto(int idx) {
 }
 
 void ofApp::drawImageMode() {
-    float W = RW - 2 * fm, H = RH - 2 * fm, cx = RW * 0.5f, cy = RH * 0.5f;
+    // Cover the FULL frame (edge-to-edge), not an fm-inset box — otherwise, as the Ken-Burns zoom
+    // breathes back toward scale 1.0 the cover stops overshooting and a black margin appears in the
+    // broadcast/snapshot ("cropped inner"). Full-frame cover keeps the image full-bleed always.
+    float W = RW, H = RH, cx = RW * 0.5f, cy = RH * 0.5f;
     if (imgList.empty()) return;   // no images → recorded scene stays clean (just the background); the
                                    // "add a folder" hint is drawn SCREEN-ONLY in draw(), never captured
     // Ken Burns: slow zoom + drift over the hold, varied per image via imgKenSeed.
