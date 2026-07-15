@@ -730,13 +730,16 @@ void ofApp::update() {
     // BROADCAST — if the ffmpeg/icecast pipe died (a source drop, usually a network blip), RECONNECT
     // rather than end the broadcast. The listener hears a brief gap; the broadcast persists.
     if (broadcasting && !icePipe && t >= iceReconnectAt) {
-        if (openIcePipe()) { iceReconnectDelay = 1.0f; ofLogNotice() << "BROADCAST: reconnected"; }
-        else { iceReconnectAt = t + iceReconnectDelay; iceReconnectDelay = std::min(iceReconnectDelay * 1.7f, 10.0f); }
+        // Try to relaunch. NOTE: popen "succeeding" only means ffmpeg SPAWNED — it may still fail to reach
+        // Icecast and die on the next write. So DON'T reset the backoff here; only a confirmed write does.
+        if (openIcePipe()) ofLogNotice() << "BROADCAST: reconnecting…";
+        iceReconnectAt = t + iceReconnectDelay;
+        iceReconnectDelay = std::min(iceReconnectDelay * 1.7f, 10.0f);
     }
-    // Move audioIn()'s queued PCM into a main-thread backlog, then write to the pipe WITHOUT blocking.
-    // A blocking write here froze the whole UI when Icecast stalled (ffmpeg stops draining its stdin →
-    // the pipe fills → write() blocks forever on the main thread).
-    if (broadcasting && icePipe) {
+    // Drain audioIn()'s queued PCM into a main-thread backlog EVERY tick while broadcasting — even while
+    // the pipe is down and reconnecting — so the queue never grows during an outage. The backlog is
+    // bounded (~8s, oldest dropped); we write it to the pipe WITHOUT blocking only when the pipe is up.
+    if (broadcasting) {
         { std::lock_guard<std::mutex> lock(mtx);
           if (!broadcastAudioQueue.empty()) {
             const char* b = reinterpret_cast<const char*>(broadcastAudioQueue.data());
@@ -744,28 +747,29 @@ void ofApp::update() {
             broadcastAudioQueue.clear();
           }
         }
-        // Bound the backlog (~8s): if the connection is stalling, drop the oldest audio rather than grow
-        // unbounded. A dead ffmpeg surfaces as a write error (EPIPE) below → reconnect.
         const size_t CAP = (size_t)sampleRate * std::max(1, recChannels) * sizeof(short) * 8;
         if (iceOutBuf.size() > CAP) iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.end() - CAP);
         bool dead = false;
+        if (icePipe) {
 #ifndef _WIN32
-        size_t off = 0;
-        while (iceFd >= 0 && off < iceOutBuf.size()) {
-            ssize_t n = ::write(iceFd, iceOutBuf.data() + off, iceOutBuf.size() - off);
-            if (n > 0) { off += (size_t)n; continue; }
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;   // pipe full — resume next tick, UI never blocks
-            if (n < 0 && errno == EINTR) continue;                            // interrupted by a signal — retry, NOT a drop
-            dead = true; break;                                               // EPIPE etc. — ffmpeg gone
-        }
-        if (off) iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.begin() + off);
+            size_t off = 0;
+            while (iceFd >= 0 && off < iceOutBuf.size()) {
+                ssize_t n = ::write(iceFd, iceOutBuf.data() + off, iceOutBuf.size() - off);
+                if (n > 0) { off += (size_t)n; continue; }
+                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;   // pipe full — resume next tick, UI never blocks
+                if (n < 0 && errno == EINTR) continue;                            // interrupted by a signal — retry, NOT a drop
+                dead = true; break;                                               // EPIPE etc. — ffmpeg gone
+            }
+            if (off) { iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.begin() + off); iceReconnectDelay = 1.0f; }  // real data flowed → healthy, reset backoff
 #else
-        if (!iceOutBuf.empty()) {
-            if (fwrite(iceOutBuf.data(), 1, iceOutBuf.size(), icePipe) < iceOutBuf.size()) dead = true;
-            iceOutBuf.clear();
-        }
+            if (!iceOutBuf.empty()) {
+                if (fwrite(iceOutBuf.data(), 1, iceOutBuf.size(), icePipe) < iceOutBuf.size()) dead = true;
+                else iceReconnectDelay = 1.0f;
+                iceOutBuf.clear();
+            }
 #endif
-        if (dead) {   // reap the dead pipe OFF-thread (pclose can block) and schedule a reconnect
+        }
+        if (dead) {   // reap the dead pipe OFF-thread (pclose can block) and schedule a retry (backoff)
             ofLogError() << "BROADCAST: pipe write failed (source dropped?) — reconnecting";
             FILE* p = icePipe; icePipe = nullptr; iceFd = -1; iceOutBuf.clear();
             if (p) std::thread([p]{ GS_PCLOSE(p); }).detach();
