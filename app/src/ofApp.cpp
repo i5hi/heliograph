@@ -2688,10 +2688,15 @@ void ofApp::registerArtist() {
 // upload never blocks rendering.
 void ofApp::pushSnapshot() {
     if (sSnapshotUrl.empty()) return;
+    // Broadcast frame = the CLEAN scene only. Re-render drawScene() into fboSnap rather than copying
+    // fboFinal (which carries heliograph's local HUD — the always-on corner ticks and, if showMeta is on,
+    // the metadata text). The client draws its OWN corner markers + metadata from the fields we send, so
+    // baking them here just doubled them (and heliograph's baked font aliased). fboSnap is RW×RH, same as
+    // the scene, so drawScene() fills it 1:1.
     fboSnap.begin();
     ofClear(0, 0, 0, 255);
-    ofSetColor(255); ofEnableBlendMode(OF_BLENDMODE_DISABLED);
-    fboFinal.draw(0, 0, fboSnap.getWidth(), fboSnap.getHeight());
+    ofSetColor(255);
+    drawScene();
     ofEnableBlendMode(OF_BLENDMODE_ALPHA);
     fboSnap.end();
     ofPixels px; fboSnap.readToPixels(px);
