@@ -84,6 +84,9 @@ public:
     void   pushStreamTimestamp();                 // inject wall-clock epoch-ms into the Icecast ICY metadata so the client can measure true end-to-end audio lag at the playhead
     static constexpr float SNAPSHOT_INTERVAL = 15.0f;   // seconds between broadcast snapshot pushes — a crisp HD grab every 15s beats a blurry one every 1-2s
     ofFbo  fboSnap;                                // HD (1080p) downscale target for the periodic JPEG snapshot push
+    bool   openIcePipe();                         // (re)launch the ffmpeg->icecast pipe, non-blocking; used by start + auto-reconnect
+    float  iceReconnectAt = 0;                    // t at which to retry the pipe after a drop (0 = now)
+    float  iceReconnectDelay = 1.0f;              // backoff between reconnect attempts (grows to ~10s)
     void   startBroadcast();
     void   stopBroadcast();
     void   pushSnapshot();

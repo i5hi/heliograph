@@ -727,9 +727,15 @@ void ofApp::update() {
         else if (recording && t > 5.5f) { stopRecording(); didRecTest = true; autoRecTest = false; }
     }
 
-    // BROADCAST — move audioIn()'s queued PCM into a main-thread backlog, then write to the icecast pipe
-    // WITHOUT blocking. A blocking write here froze the whole UI when Icecast stalled (ffmpeg stops
-    // draining its stdin → the pipe fills → write() blocks forever on the main thread).
+    // BROADCAST — if the ffmpeg/icecast pipe died (a source drop, usually a network blip), RECONNECT
+    // rather than end the broadcast. The listener hears a brief gap; the broadcast persists.
+    if (broadcasting && !icePipe && t >= iceReconnectAt) {
+        if (openIcePipe()) { iceReconnectDelay = 1.0f; ofLogNotice() << "BROADCAST: reconnected"; }
+        else { iceReconnectAt = t + iceReconnectDelay; iceReconnectDelay = std::min(iceReconnectDelay * 1.7f, 10.0f); }
+    }
+    // Move audioIn()'s queued PCM into a main-thread backlog, then write to the pipe WITHOUT blocking.
+    // A blocking write here froze the whole UI when Icecast stalled (ffmpeg stops draining its stdin →
+    // the pipe fills → write() blocks forever on the main thread).
     if (broadcasting && icePipe) {
         { std::lock_guard<std::mutex> lock(mtx);
           if (!broadcastAudioQueue.empty()) {
@@ -739,31 +745,35 @@ void ofApp::update() {
           }
         }
         // Bound the backlog (~8s): if the connection is stalling, drop the oldest audio rather than grow
-        // unbounded. A genuinely dead ffmpeg surfaces as a write error (EPIPE) below and stops the broadcast.
+        // unbounded. A dead ffmpeg surfaces as a write error (EPIPE) below → reconnect.
         const size_t CAP = (size_t)sampleRate * std::max(1, recChannels) * sizeof(short) * 8;
         if (iceOutBuf.size() > CAP) iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.end() - CAP);
+        bool dead = false;
 #ifndef _WIN32
         size_t off = 0;
         while (iceFd >= 0 && off < iceOutBuf.size()) {
             ssize_t n = ::write(iceFd, iceOutBuf.data() + off, iceOutBuf.size() - off);
             if (n > 0) { off += (size_t)n; continue; }
             if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) break;   // pipe full — resume next tick, UI never blocks
-            ofLogError() << "BROADCAST: pipe write failed (connection dropped?) — stopping";
-            stopBroadcast(); off = 0; break;
+            if (n < 0 && errno == EINTR) continue;                            // interrupted by a signal — retry, NOT a drop
+            dead = true; break;                                               // EPIPE etc. — ffmpeg gone
         }
         if (off) iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.begin() + off);
 #else
-        // Windows _popen lacks a simple non-blocking mode; write in one shot (rare platform for this use).
         if (!iceOutBuf.empty()) {
-            if (fwrite(iceOutBuf.data(), 1, iceOutBuf.size(), icePipe) < iceOutBuf.size()) {
-                ofLogError() << "BROADCAST: pipe write failed — stopping"; stopBroadcast();
-            }
+            if (fwrite(iceOutBuf.data(), 1, iceOutBuf.size(), icePipe) < iceOutBuf.size()) dead = true;
             iceOutBuf.clear();
         }
 #endif
+        if (dead) {   // reap the dead pipe OFF-thread (pclose can block) and schedule a reconnect
+            ofLogError() << "BROADCAST: pipe write failed (source dropped?) — reconnecting";
+            FILE* p = icePipe; icePipe = nullptr; iceFd = -1; iceOutBuf.clear();
+            if (p) std::thread([p]{ GS_PCLOSE(p); }).detach();
+            iceReconnectAt = t + iceReconnectDelay;
+            iceReconnectDelay = std::min(iceReconnectDelay * 1.7f, 10.0f);
+        }
     }
     if (broadcasting && (t - lastSnapshotT) > SNAPSHOT_INTERVAL) { pushSnapshot(); lastSnapshotT = t; }
-    if (broadcasting && (t - lastStreamTsT) > 1.0f) { pushStreamTimestamp(); lastStreamTsT = t; }
 
     // Non-blocking registration verify (fired in setup): poll for the /whoami result file.
     if (regVerifyPending) {
@@ -2497,6 +2507,27 @@ void ofApp::stopRecording() {
 //  BROADCAST — live Icecast forwarding (audio) + periodic snapshot push (visual), independent of local
 //  recording. Config lives in the settings editor's BROADCAST section (see buildFields/writeSession).
 //--------------------------------------------------------------
+// Launch (or relaunch) the ffmpeg -> icecast pipe and make it non-blocking. Used by startBroadcast AND
+// the auto-reconnect path in update(). Returns false if ffmpeg couldn't be spawned.
+bool ofApp::openIcePipe() {
+    std::string port  = sIcePort.empty()  ? "8000"     : sIcePort;
+    std::string mount = sIceMount.empty() ? "live.mp3" : sIceMount;
+    std::string url = "icecast://source:" + sIcePassword + "@" + sIceHost + ":" + port + "/" + mount;
+    std::string log = gsScratch("gs_broadcast.log");
+    // 320 kbps CBR MP3 via LAME at the source's native rate + 16-bit — universal browser <audio> playback.
+    std::string cmd = gsFFmpeg() + " -y -f s16le -ar " + ofToString(sampleRate) + " -ac " + ofToString(std::max(1, recChannels)) +
+        " -i - -c:a libmp3lame -b:a 320k -f mp3 -content_type audio/mpeg " + gsShQuote(url) + " >>" + gsShQuote(log) + " 2>&1";
+    icePipe = GS_POPEN(cmd.c_str(), GS_PIPEMODE);
+    if (!icePipe) return false;
+    iceOutBuf.clear();
+#ifndef _WIN32
+    // Non-blocking: if Icecast stalls, ffmpeg stops draining stdin; a blocking write would hang the UI.
+    iceFd = fileno(icePipe);
+    if (iceFd >= 0) { int fl = fcntl(iceFd, F_GETFL, 0); if (fl != -1) fcntl(iceFd, F_SETFL, fl | O_NONBLOCK); }
+#endif
+    return true;
+}
+
 void ofApp::startBroadcast() {
     if (broadcasting) return;
     if (!sRegistered || sIceMount.empty() || sIcePassword.empty()) {
@@ -2506,30 +2537,13 @@ void ofApp::startBroadcast() {
         return;
     }
     { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
-    std::string port  = sIcePort.empty()  ? "8000"     : sIcePort;
-    std::string mount = sIceMount.empty() ? "live.mp3" : sIceMount;
-    std::string url = "icecast://source:" + sIcePassword + "@" + sIceHost + ":" + port + "/" + mount;
-    std::string log = gsScratch("gs_broadcast.log");
-    // 320 kbps CBR MP3 (the MP3 ceiling — effectively transparent) via LAME at the source's native rate
-    // + 16-bit. MP3 is deliberate: universal browser <audio> playback (incl. Safari/iOS) AND the ICY
-    // timestamp that drives the accurate audio-lag readout. (Lossless FLAC was tried; reverted — the
-    // Ogg trade-offs weren't worth it over near-transparent 320 MP3.)
-    std::string cmd = gsFFmpeg() + " -y -f s16le -ar " + ofToString(sampleRate) + " -ac " + ofToString(std::max(1, recChannels)) +
-        " -i - -c:a libmp3lame -b:a 320k -f mp3 -content_type audio/mpeg " + gsShQuote(url) + " >>" + gsShQuote(log) + " 2>&1";
-    icePipe = GS_POPEN(cmd.c_str(), GS_PIPEMODE);
-    if (!icePipe) { ofLogError() << "BROADCAST: failed to launch ffmpeg"; return; }
-    iceOutBuf.clear();
-#ifndef _WIN32
-    // Make the pipe non-blocking: if Icecast stalls, ffmpeg stops draining stdin and a blocking write
-    // would hang the main thread (UI freeze). Non-blocking lets update() write what fits and move on.
-    iceFd = fileno(icePipe);
-    if (iceFd >= 0) { int fl = fcntl(iceFd, F_GETFL, 0); if (fl != -1) fcntl(iceFd, F_SETFL, fl | O_NONBLOCK); }
-#endif
+    if (!openIcePipe()) { ofLogError() << "BROADCAST: failed to launch ffmpeg"; return; }
     broadcasting = true;
     broadcastStart = t;
+    iceReconnectDelay = 1.0f; iceReconnectAt = 0;
     lastSnapshotT = -100;   // push a snapshot on the very next update() tick
     // B and R are INDEPENDENT: broadcasting never touches local recording. Press R to also record.
-    ofLogNotice() << "BROADCAST start -> " << sIceHost << ":" << port << "/" << mount;
+    ofLogNotice() << "BROADCAST start -> " << sIceHost << ":" << sIcePort << "/" << sIceMount;
 }
 
 void ofApp::stopBroadcast() {
