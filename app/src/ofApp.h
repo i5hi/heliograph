@@ -49,6 +49,7 @@ public:
     std::vector<char> iceOutBuf;                  // main-thread backlog of PCM bytes not yet accepted by the (non-blocking) pipe
     std::vector<short> broadcastAudioQueue;       // PCM queued by audioIn() (audio thread), drained by update() (main thread)
     bool   broadcasting = false;
+    bool   bcastAway = false;                     // broadcaster presence pushed in the transmission: false = ON DECK, true = AWAY
     float  broadcastStart = 0;                    // t when startBroadcast() ran — drives the ON AIR elapsed-time readout
     std::string sIceHost = "", sIcePort = "8000", sIceMount = "live.mp3", sIcePassword = "";
     std::string sSnapshotUrl = "", sSnapshotToken = "";
@@ -85,8 +86,12 @@ public:
     static constexpr float SNAPSHOT_INTERVAL = 15.0f;   // seconds between broadcast snapshot pushes — a crisp HD grab every 15s beats a blurry one every 1-2s
     ofFbo  fboSnap;                                // HD (1080p) downscale target for the periodic JPEG snapshot push
     bool   openIcePipe();                         // (re)launch the ffmpeg->icecast pipe, non-blocking; used by start + auto-reconnect
+    bool   iceAuthFailed();                       // scan ffmpeg's log for a CREDENTIAL error (401/unauthorized) — the ONLY reason to stop retrying
     float  iceReconnectAt = 0;                    // t at which to retry the pipe after a drop (0 = now)
     float  iceReconnectDelay = 1.0f;              // backoff between reconnect attempts (grows to ~10s)
+    int    bcastReconnects = 0;                   // reconnects this session (logged; heartbeat reports it)
+    bool   iceWasDown = false;                    // true between a drop and the next confirmed write (so we log "reconnected" once)
+    float  lastBcastBeat = 0;                     // t of the last broadcast heartbeat log line
     void   startBroadcast();
     void   stopBroadcast();
     void   pushSnapshot();

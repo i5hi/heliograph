@@ -269,6 +269,11 @@ void ofApp::setup() {
     ofSetEscapeQuitsApp(false);   // ESC closes the settings/help overlay — it must NOT quit the app
 
     seedUserData();               // first launch: create ~/.heliograph/ (session.json + factory presets) from bin/data
+    // Persistent log — survives Finder launches (console output is otherwise lost), so an overnight
+    // unattended broadcast can be reviewed in the morning. Appends to ~/.heliograph/heliograph.log.
+    ofLogToFile(gsHome() + "heliograph.log", true);
+    ofSetLogLevel(OF_LOG_NOTICE);
+    ofLogNotice() << "───── heliograph launch " << ofGetTimestampString("%Y-%m-%d %H:%M:%S") << " ─────";
     gsImagesDir();                // ensure ~/.heliograph/images/ exists for IMAGE mode
     loadImages();                 // scan any images already dropped in
     loadSession();
@@ -760,22 +765,40 @@ void ofApp::update() {
                 if (n < 0 && errno == EINTR) continue;                            // interrupted by a signal — retry, NOT a drop
                 dead = true; break;                                               // EPIPE etc. — ffmpeg gone
             }
-            if (off) { iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.begin() + off); iceReconnectDelay = 1.0f; }  // real data flowed → healthy, reset backoff
+            if (off) {   // real data flowed → healthy
+                iceOutBuf.erase(iceOutBuf.begin(), iceOutBuf.begin() + off);
+                iceReconnectDelay = 1.0f;
+                if (iceWasDown) { ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST reconnected (was down)"; iceWasDown = false; }
+            }
 #else
             if (!iceOutBuf.empty()) {
                 if (fwrite(iceOutBuf.data(), 1, iceOutBuf.size(), icePipe) < iceOutBuf.size()) dead = true;
-                else iceReconnectDelay = 1.0f;
+                else { iceReconnectDelay = 1.0f; if (iceWasDown) { ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST reconnected"; iceWasDown = false; } }
                 iceOutBuf.clear();
             }
 #endif
         }
-        if (dead) {   // reap the dead pipe OFF-thread (pclose can block) and schedule a retry (backoff)
-            ofLogError() << "BROADCAST: pipe write failed (source dropped?) — reconnecting";
+        if (dead) {   // reap the dead pipe OFF-thread (pclose can block), then decide: auth = stop, else retry
             FILE* p = icePipe; icePipe = nullptr; iceFd = -1; iceOutBuf.clear();
             if (p) std::thread([p]{ GS_PCLOSE(p); }).detach();
-            iceReconnectAt = t + iceReconnectDelay;
-            iceReconnectDelay = std::min(iceReconnectDelay * 1.7f, 10.0f);
+            if (iceAuthFailed()) {   // bad/revoked credentials — the ONLY failure retrying can't fix
+                ofLogError() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST AUTH FAILED (401) — stopping. Re-register in S -> REGISTER.";
+                errMsg = "BROADCAST STOPPED \xE2\x80\x94 AUTH FAILED (re-register)"; errFlash = t;
+                stopBroadcast();
+            } else {                 // any transient failure (5xx / timeout / refused / dropped) — keep retrying forever
+                bcastReconnects++; iceWasDown = true;
+                ofLogError() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST source dropped (reconnect #" << bcastReconnects << ") — retrying, will keep trying while ON AIR";
+                iceReconnectAt = t + iceReconnectDelay;
+                iceReconnectDelay = std::min(iceReconnectDelay * 1.7f, 10.0f);
+            }
         }
+    }
+    // Heartbeat — one log line a minute so an overnight/unattended run is reviewable in the morning.
+    if (broadcasting && (t - lastBcastBeat) > 60.0f) {
+        lastBcastBeat = t;
+        ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST alive — uptime=" << (int)(t - broadcastStart)
+                      << "s status=" << (bcastAway ? "AWAY" : "ON DECK") << " reconnects=" << bcastReconnects
+                      << (icePipe ? "" : " [link DOWN, retrying]");
     }
     if (broadcasting && (t - lastSnapshotT) > SNAPSHOT_INTERVAL) { pushSnapshot(); lastSnapshotT = t; }
 
@@ -2519,8 +2542,11 @@ bool ofApp::openIcePipe() {
     std::string url = "icecast://source:" + sIcePassword + "@" + sIceHost + ":" + port + "/" + mount;
     std::string log = gsScratch("gs_broadcast.log");
     // 320 kbps CBR MP3 via LAME at the source's native rate + 16-bit — universal browser <audio> playback.
-    std::string cmd = gsFFmpeg() + " -y -f s16le -ar " + ofToString(sampleRate) + " -ac " + ofToString(std::max(1, recChannels)) +
-        " -i - -c:a libmp3lame -b:a 320k -f mp3 -content_type audio/mpeg " + gsShQuote(url) + " >>" + gsShQuote(log) + " 2>&1";
+    // -hide_banner -loglevel warning -nostats: no per-second progress spam; the log holds only the CURRENT
+    // attempt's warnings/errors (single '>' truncates), so iceAuthFailed() can read a small, relevant log.
+    std::string cmd = gsFFmpeg() + " -hide_banner -loglevel warning -nostats -y -f s16le -ar " + ofToString(sampleRate) +
+        " -ac " + ofToString(std::max(1, recChannels)) +
+        " -i - -c:a libmp3lame -b:a 320k -f mp3 -content_type audio/mpeg " + gsShQuote(url) + " >" + gsShQuote(log) + " 2>&1";
     icePipe = GS_POPEN(cmd.c_str(), GS_PIPEMODE);
     if (!icePipe) return false;
     iceOutBuf.clear();
@@ -2530,6 +2556,20 @@ bool ofApp::openIcePipe() {
     if (iceFd >= 0) { int fl = fcntl(iceFd, F_GETFL, 0); if (fl != -1) fcntl(iceFd, F_SETFL, fl | O_NONBLOCK); }
 #endif
     return true;
+}
+
+// True ONLY for a credential rejection (bad/revoked Icecast source password) — the one failure retrying
+// can't fix. Reads the current attempt's ffmpeg log (truncated per spawn). Everything else — 5xx,
+// timeouts, "connection refused/reset", "network unreachable", 403 mount-in-use — returns false → retry.
+bool ofApp::iceAuthFailed() {
+    std::ifstream in(gsScratch("gs_broadcast.log"));
+    if (!in) return false;
+    std::string all, line;
+    while (std::getline(in, line)) all += line + "\n";
+    for (char& c : all) if (c >= 'A' && c <= 'Z') c += 32;   // lowercase
+    return all.find("401") != std::string::npos
+        || all.find("unauthorized") != std::string::npos
+        || all.find("authentication failed") != std::string::npos;
 }
 
 void ofApp::startBroadcast() {
@@ -2543,11 +2583,13 @@ void ofApp::startBroadcast() {
     { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
     if (!openIcePipe()) { ofLogError() << "BROADCAST: failed to launch ffmpeg"; return; }
     broadcasting = true;
+    bcastAway = false;   // you just hit B — you're at the console (ON DECK) until you press A
     broadcastStart = t;
     iceReconnectDelay = 1.0f; iceReconnectAt = 0;
+    bcastReconnects = 0; iceWasDown = false; lastBcastBeat = t;
     lastSnapshotT = -100;   // push a snapshot on the very next update() tick
     // B and R are INDEPENDENT: broadcasting never touches local recording. Press R to also record.
-    ofLogNotice() << "BROADCAST start -> " << sIceHost << ":" << sIcePort << "/" << sIceMount;
+    ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST start -> " << sIceHost << ":" << sIcePort << "/" << sIceMount;
 }
 
 void ofApp::stopBroadcast() {
@@ -2562,7 +2604,7 @@ void ofApp::stopBroadcast() {
     if (p) std::thread([p]{ GS_PCLOSE(p); }).detach();
     { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
     // Recording is independent — a manual recording (R) keeps running if the artist started one.
-    ofLogNotice() << "BROADCAST stop";
+    ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  BROADCAST stop (reconnects this session=" << bcastReconnects << ")";
 }
 
 // On startup, confirm we're still registered server-side (the server could have been reset). NON-BLOCKING:
@@ -2683,6 +2725,7 @@ void ofApp::pushSnapshot() {
     meta["hdgNote"]  = subNote;                 // its note letter
     meta["date"]     = sDate;
     meta["uptime"]   = (int)(t - broadcastStart);   // seconds on air
+    meta["status"]   = bcastAway ? "AWAY" : "ON DECK";   // broadcaster presence — client shows it in place of LISTENING
     std::string metaB64 = gsBase64(meta.dump());
 
     std::string log = gsScratch("gs_snapshot.log");
@@ -2774,6 +2817,12 @@ void ofApp::keyPressed(int key) {
     else if (key == 'f' || key == 'F') ofToggleFullscreen();
     else if (key == 'r' || key == 'R') { if (recording) stopRecording(); else startRecording(); }
     else if (key == 'b' || key == 'B') { if (broadcasting) stopBroadcast(); else startBroadcast(); }   // live icecast + snapshot push (independent of local recording)
+    else if (key == 'a' || key == 'A') {                                         // broadcaster presence: toggle ON DECK <-> AWAY
+        bcastAway = !bcastAway;
+        errMsg = bcastAway ? "STATUS: AWAY" : "STATUS: ON DECK"; errFlash = t;
+        ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  STATUS -> " << (bcastAway ? "AWAY" : "ON DECK");
+        if (broadcasting) lastSnapshotT = -100;                                  // push a fresh snapshot NOW so the status reaches listeners immediately
+    }
     else if (key == 'm' || key == 'M') {                                         // cycle modes (count comes from the Mode options — add a mode without touching this)
         for (auto& sl : sliders) if (sl.val == &cfgMode && !sl.opts.empty()) { cfgMode = fmodf(cfgMode + 1.0f, (float)sl.opts.size()); break; }
     }
