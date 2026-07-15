@@ -252,7 +252,9 @@ void ofApp::setup() {
         st.addRanges({ ofUnicode::Latin, ofUnicode::Latin1Supplement, ofUnicode::GeneralPunctuation });
         f.load(st);
     };
-    const char* reg = "fonts/Saira-Variable.ttf";
+    // STATIC Saira (not the variable .ttf): openFrameworks/FreeType renders variable fonts with thin,
+    // badly-hinted strokes that alias hard at these sizes. The static Medium weight is crisp + solid.
+    const char* reg = "fonts/SairaSemiCondensed-Medium.ttf";
     loadFont(fKick,   reg, (int)(18 * S)); fKick.setLetterSpacing(1.35f);   // (legacy kick font; wordmark now uses fBrand)
     loadFont(fTitle,  reg, (int)(26 * S));
     loadFont(fLabel,  reg, (int)(10 * S)); fLabel.setLetterSpacing(1.42f);
