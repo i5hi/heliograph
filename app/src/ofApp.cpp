@@ -286,6 +286,15 @@ void ofApp::setup() {
     saveLayoutState(0); saveLayoutState(1);   // both layouts start from the same defaults, then diverge independently
     scanPresets();
     setupAudio();
+
+    // Headless resilience: if a prior run was broadcasting and exited unexpectedly (crash / kill / power
+    // blip), the sentinel written by startBroadcast() still exists — come straight back on air with no
+    // keystroke, so an overnight broadcast survives an app restart. A clean stop (B) or an auth failure
+    // deletes the sentinel, so a normal launch never auto-broadcasts.
+    if (sRegistered && ofFile::doesFileExist(gsHome() + "broadcasting.flag")) {
+        ofLogNotice() << ofGetTimestampString("%H:%M:%S") << "  AUTO-RESUME: broadcast sentinel present — going live without a keystroke";
+        startBroadcast();
+    }
 }
 
 //--------------------------------------------------------------
@@ -1379,6 +1388,21 @@ void ofApp::draw() {
             fUI.drawString(h2, RW * 0.5f - fUI.stringWidth(h2) * 0.5f, RH * 0.5f + 24 * S);
         }
         drawImageBar();
+    }
+    // Broadcaster PRESENCE badge — screen-only (never recorded), top-right, always visible while ON AIR
+    // so you can see your status at a glance. Toggle with 'A'.
+    if (broadcasting) {
+        std::string s = bcastAway ? "AWAY" : "ON DECK";
+        float pad = 13 * S, dotR = 5 * S, gap = 9 * S, bh = 32 * S;
+        ofRectangle tb = fUI.getStringBoundingBox(s, 0, 0);
+        float bw = pad + dotR * 2 + gap + tb.width + pad;
+        float bx = RW - fm - bw, by = fm;
+        ofSetColor(12, 14, 16, 225); ofDrawRectRounded(bx, by, bw, bh, 5 * S);
+        ofNoFill(); ofSetLineWidth(1 * S); ofSetColor(74, 80, 78); ofDrawRectRounded(bx, by, bw, bh, 5 * S); ofFill();
+        ofSetColor(bcastAway ? ofColor(214, 150, 60) : ofColor(120, 210, 140));   // AWAY = amber · ON DECK = green
+        ofDrawCircle(bx + pad + dotR, by + bh * 0.5f, dotR);
+        ofSetColor(224, 229, 226);
+        fUI.drawString(s, floorf(bx + pad + dotR * 2 + gap), floorf(by + (bh - tb.height) * 0.5f - tb.y));
     }
     if (showHelp)       drawHelp();        // 'h' — shortcuts overlay
     ofPopMatrix();
@@ -2569,9 +2593,14 @@ bool ofApp::iceAuthFailed() {
     std::string all, line;
     while (std::getline(in, line)) all += line + "\n";
     for (char& c : all) if (c >= 'A' && c <= 'Z') c += 32;   // lowercase
-    return all.find("401") != std::string::npos
-        || all.find("unauthorized") != std::string::npos
-        || all.find("authentication failed") != std::string::npos;
+    // Match only GENUINE auth signatures. Never match a bare "401": ffmpeg prints pointer
+    // addresses like "0x933040180" that contain "401", which would false-positive and
+    // permanently kill a perfectly recoverable broadcast (e.g. an Icecast broken pipe on a
+    // network blip). Require the actual word or a real 401 phrase instead.
+    return all.find("unauthorized") != std::string::npos
+        || all.find("authentication failed") != std::string::npos
+        || all.find("http error 401") != std::string::npos
+        || all.find("server returned 401") != std::string::npos;
 }
 
 void ofApp::startBroadcast() {
@@ -2585,6 +2614,7 @@ void ofApp::startBroadcast() {
     { std::lock_guard<std::mutex> lock(mtx); broadcastAudioQueue.clear(); }
     if (!openIcePipe()) { ofLogError() << "BROADCAST: failed to launch ffmpeg"; return; }
     broadcasting = true;
+    ofBufferToFile(gsHome() + "broadcasting.flag", ofBuffer("1", 1));   // resilience sentinel — survives a crash/kill so the next launch auto-resumes
     bcastAway = false;   // you just hit B — you're at the console (ON DECK) until you press A
     broadcastStart = t;
     iceReconnectDelay = 1.0f; iceReconnectAt = 0;
@@ -2597,6 +2627,7 @@ void ofApp::startBroadcast() {
 void ofApp::stopBroadcast() {
     if (!broadcasting) return;
     broadcasting = false;
+    ofFile::removeFile(gsHome() + "broadcasting.flag", false);   // deliberate/auth stop — do NOT auto-resume on next launch
     iceFd = -1; iceOutBuf.clear();
     // Reap the ffmpeg pipe OFF the main thread: pclose() waits for ffmpeg to exit, and if it's wedged on
     // a stalled Icecast socket that never happens — a synchronous close here froze the UI on stop. The
