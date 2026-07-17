@@ -8,7 +8,7 @@
 #   The location of your root openFrameworks installation
 #       (default) OF_ROOT = ../../.. 
 ################################################################################
-# OF_ROOT = ../../../
+OF_ROOT = /mnt/data/i5hi/of_v0.12.1_linux64_gcc6_release
 
 ################################################################################
 # PROJECT ROOT
@@ -146,3 +146,9 @@
 # Uncomment/comment below to switch between C++11 and C++17 ( or newer ). On macOS C++17 needs 10.15 or above.
 # export MAC_OS_MIN_VERSION = 10.15
 # export MAC_OS_CPP_VER = -std=c++17
+
+################################################################################
+# APP NAME  (local: this project folder is "app"; force the binary name so it
+#            matches the alias and the CI convention -> bin/heliograph)
+################################################################################
+APPNAME = heliograph
