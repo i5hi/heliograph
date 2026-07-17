@@ -8,7 +8,10 @@
 #   The location of your root openFrameworks installation
 #       (default) OF_ROOT = ../../.. 
 ################################################################################
-OF_ROOT = /mnt/data/i5hi/of_v0.12.1_linux64_gcc6_release
+# Leave OF_ROOT unset here so the Makefile default (../../..) is used — this keeps CI and the standard
+# openFrameworks layout (apps/myApps/heliograph) working. For a Linux build where OF lives elsewhere,
+# pass it on the command line instead of committing an absolute path, e.g.:
+#   make -j"$(nproc)" OF_ROOT=/mnt/data/i5hi/of_v0.12.1_linux64_gcc6_release Release
 
 ################################################################################
 # PROJECT ROOT
