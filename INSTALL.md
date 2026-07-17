@@ -57,8 +57,13 @@ On the [Releases](../../releases) page, open the latest release and download the
 2. Run **`heliograph.exe`** (keep the `.dll` files and the `data/` folder next to it).
 3. SmartScreen may warn on an unsigned app → **More info → Run anyway**.
 
-> **ffmpeg** is required for recording and broadcasting. It's bundled on Windows and pulled in by the
-> apt line on Linux. On macOS, install it with [Homebrew](https://brew.sh): `brew install ffmpeg`.
+> **ffmpeg** is required for recording, broadcasting, and **publishing** (extracting audio from your
+> recordings). It's bundled on Windows and pulled in by the apt line on Linux. On macOS, install it with
+> [Homebrew](https://brew.sh): `brew install ffmpeg`. (`curl` — used for all uploads — ships with modern
+> Windows/macOS/Linux.)
+>
+> **Building heliograph from source on Windows** (Visual Studio + openFrameworks): see
+> **[`app/WINDOWS.md`](app/WINDOWS.md)**.
 
 ---
 
