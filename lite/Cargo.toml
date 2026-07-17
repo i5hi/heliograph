@@ -1,0 +1,33 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/helio-core",
+    "crates/heliod",
+    "crates/helio-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["i5hi"]
+repository = "https://github.com/i5hi/heliograph"
+
+# Shared dependency versions — one place to bump.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+dirs = "6"
+
+[profile.release]
+# The target is a Pi Zero 2 W — favour small, fast binaries.
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

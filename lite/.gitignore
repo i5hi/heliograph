@@ -1,0 +1,6 @@
+/target
+/target-*
+**/*.rs.bk
+*.pdb
+# local runtime state (created at ~/.heliod by default; ignore any stray copies)
+/heliod-home/

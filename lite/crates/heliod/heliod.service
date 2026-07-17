@@ -1,0 +1,21 @@
+[Unit]
+Description=heliod — headless broadcast appliance
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a normal user in the `audio` group so ALSA/PipeWire capture works.
+User=helio
+SupplementaryGroups=audio
+Environment=HELIO_HOME=/var/lib/heliod
+Environment=HELIO_BIND=127.0.0.1:4777
+Environment=RUST_LOG=heliod=info,helio_core=info
+ExecStart=/usr/local/bin/heliod
+Restart=always
+RestartSec=2
+# Real-time-ish scheduling helps capture; harmless if the host disallows it.
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

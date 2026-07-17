@@ -1,0 +1,32 @@
+[package]
+name = "heliod"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless broadcast daemon — capture → Opus → Icecast, with an HTTP control API."
+
+[[bin]]
+name = "heliod"
+path = "src/main.rs"
+
+[dependencies]
+helio-core = { path = "../helio-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+base64.workspace = true
+dirs.workspace = true
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+cpal = "0.15"
+opus = "0.3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Native ALSA capture (Linux) — RW access, which works with the zoom driver where cpal's
+# mmap path returns silence. Removes the arecord subprocess hack entirely.
+[target.'cfg(target_os = "linux")'.dependencies]
+alsa = "0.9"
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }

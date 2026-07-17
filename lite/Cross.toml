@@ -1,0 +1,8 @@
+# Cross-compile config for the Pi (aarch64). cpal's alsa-sys needs the ALSA dev
+# headers/libs for the target; install them into the build container. libopus is
+# vendored+built from source by audiopus_sys, so no target opus package is needed.
+[target.aarch64-unknown-linux-gnu]
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update && apt-get install -y libasound2-dev:arm64",
+]
