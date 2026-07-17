@@ -108,13 +108,31 @@ static std::string gsScratch(const std::string& f) {
     return ofToDataPath(f, true);
 #endif
 }
-// Single-quote a value for safe interpolation into a shell command line (BROADCAST fields —
-// Icecast password, snapshot URL/token — are free-typed by the artist, so this isn't optional).
+// Quote a value for safe interpolation into a shell command line (BROADCAST fields — Icecast
+// password, snapshot URL/token — are free-typed by the artist, so this isn't optional).
+// Cross-platform: POSIX sh uses single quotes; Windows cmd.exe ignores single quotes, so there we
+// wrap in double quotes and escape embedded double-quotes. (Our interpolated args — URLs, tokens,
+// base64 header values, file paths — don't contain cmd %VAR% patterns, so double-quoting is safe.)
 static std::string gsShQuote(const std::string& s) {
+#if defined(_WIN32)
+    std::string q = "\"";
+    for (char c : s) q += (c == '"') ? std::string("\\\"") : std::string(1, c);
+    q += "\"";
+    return q;
+#else
     std::string q = "'";
     for (char c : s) q += (c == '\'') ? "'\\''" : std::string(1, c);
     q += "'";
     return q;
+#endif
+}
+// The null device + a stderr-discard suffix, per platform (POSIX `/dev/null` vs Windows `NUL`).
+static std::string gsNullDev() {
+#if defined(_WIN32)
+    return "NUL";
+#else
+    return "/dev/null";
+#endif
 }
 // Channel-branding fonts. The KEY is shared verbatim with helio-client's FONTS list (client maps it to
 // a @font-face family) — heliograph only sends the key; it bundles the same faces to render the preview.
@@ -354,6 +372,7 @@ void ofApp::loadSession() {
                 sRegistered = r.value("registered", false);
                 if (sRegistered) regStatus = "Registered as " + sArtist;
             }
+            sCollectionName = j.value("collection", sCollectionName);   // PUBLISH tab: persisted collection name
         } catch (...) { ofLogError() << "session.json parse failed"; }
     }
     // date is always the system date — sessions capture live, so it can't be edited or faked
@@ -1983,6 +2002,12 @@ void ofApp::buildFields() {
     // backed up — you can't add a donation address for a wallet you might not control/recover.
     for (auto& f : fields) if (f.sp == &sLnAddress || f.sp == &sBtcAddress || f.sp == &sLqAddress) f.gateBackup = true;
 
+    // ---- PUBLISH: publish the local recordings as a named collection on the registered server (parity with
+    // the `helio` CLI). The artist types a collection name; PUBLISH (drawn below the field) POSTs /collections
+    // then uploads each recording's extracted audio. Needs an account (see REGISTER).
+    curTab = 4;
+    addS("Collection Name", &sCollectionName);   // the collection your recordings are published under
+
     // Once registered, the artist name IS the channel identity (it hashes to the channel id) — lock every
     // artist-name field so it can't be changed. Pure local-recording users (not registered) stay editable.
     for (auto& f : fields) if (f.sp == &sArtist) f.locked = sRegistered;
@@ -2029,6 +2054,7 @@ void ofApp::writeSession() {
     j["registration"]["server"]     = sRegServer;
     j["registration"]["channelId"]  = sChannelId;
     j["registration"]["registered"] = sRegistered;
+    j["collection"] = sCollectionName;   // PUBLISH tab: persisted collection name
     j["coordinates"]["waypoint"] = sWaypoint;
     j["coordinates"]["heading"]  = sHeading;
     j["coordinates"]["distance"] = sDist;
@@ -2121,16 +2147,17 @@ void ofApp::drawSettings() {
     if (settingsTab == 1) contentH += 64;    // ROUTING draws a REFRESH DEVICE LIST button below the fields (must be counted here or it collides with the footer)
     if (settingsTab == 2) contentH += 104;   // REGISTER draws a button + status line + subline below the fields (same footer-overlap trap)
     if (settingsTab == 3) contentH += 148;   // CHANNEL draws a font PREVIEW box + hint + donations note below the fields (footer-overlap trap)
+    if (settingsTab == 4) contentH += 104;   // PUBLISH draws a button + status line + subline below the field (same footer-overlap trap)
     float FY_START = 158, FOOTER_RESERVE = 126;   // FY_START must match tby+tbh+46 below; footer = gap + RECORDING/SAVE/hint block
     float pw = 1200 * S, ph = (FY_START + contentH + FOOTER_RESERVE) * S;
     float px = (RW - pw) * 0.5f, py = (RH - ph) * 0.5f;
     ofSetColor(12, 14, 16, 248); ofDrawRectangle(px, py, pw, ph);
     ofSetColor(210, 216, 212); fKick.drawString("SETTINGS", px + 40 * S, py + 56 * S);
 
-    // tab bar — SESSION / ROUTING / REGISTER / CHANNEL (same chip styling as the right panel's GRAPH/AUDIO/MOD)
-    const char* tabNames[4] = { "SESSION", "ROUTING", "REGISTER", "CHANNEL" };
-    float tby = py + 78 * S, tbh = 34 * S, tbg = 8 * S, tbw = (pw - 80 * S - 3 * tbg) / 4.0f;
-    for (int i = 0; i < 4; i++) {
+    // tab bar — SESSION / ROUTING / REGISTER / CHANNEL / PUBLISH (same chip styling as the right panel's GRAPH/AUDIO/MOD)
+    const char* tabNames[5] = { "SESSION", "ROUTING", "REGISTER", "CHANNEL", "PUBLISH" };
+    float tby = py + 78 * S, tbh = 34 * S, tbg = 8 * S, tbw = (pw - 80 * S - 4 * tbg) / 5.0f;
+    for (int i = 0; i < 5; i++) {
         settingsTabBox[i] = ofRectangle(px + 40 * S + i * (tbw + tbg), tby, tbw, tbh);
         bool hot = (settingsTab == i);
         ofSetColor(hot ? ofColor(58, 70, 64) : ofColor(34, 38, 42)); ofDrawRectangle(settingsTabBox[i]);
@@ -2294,6 +2321,28 @@ void ofApp::drawSettings() {
         fUI.drawString(hint, px + 40 * S, by + bh + 26 * S);
         ofSetColor(150, 156, 154);
         fUI.drawString("Donations broadcast only after Wallet Backed Up = YES \xC2\xB7 no wallet? set one up at wallet.bullbitcoin.com", px + 40 * S, by + bh + 50 * S);
+    }
+    if (settingsTab == 4) {   // PUBLISH — button that POSTs recordings to the server as a collection + a status line
+        publishBox = ofRectangle(px + 40 * S, fy + 10 * S, 200 * S, 44 * S);
+        bool ready = sRegistered && !sCollectionName.empty();
+        ofSetColor(ready ? ofColor(40, 60, 46) : ofColor(34, 38, 42)); ofDrawRectangle(publishBox);
+        ofNoFill(); ofSetLineWidth(1.0f * S); ofSetColor(ready ? ofColor(140, 200, 160) : ofColor(92, 100, 96)); ofDrawRectangle(publishBox); ofFill();
+        ofSetColor(206, 212, 208);
+        std::string plabel = "PUBLISH";
+        ofRectangle bb = fUI.getStringBoundingBox(plabel, 0, 0);
+        fUI.drawString(plabel, floorf(publishBox.x + (publishBox.width - bb.width) * 0.5f - bb.x), floorf(publishBox.y + (publishBox.height - bb.height) * 0.5f - bb.y));
+        // status / progress line — updated from the detached upload thread (guarded by publishMtx)
+        std::string ps; float pf;
+        { std::lock_guard<std::mutex> lk(publishMtx); ps = publishStatus; pf = publishFlash; }
+        if (!ps.empty()) {
+            bool fresh = (t - pf) < 4.0f;
+            ofSetColor(ofColor(150, 210, 170), fresh ? 255 : 170);
+            fUI.drawString(ps, publishBox.getMaxX() + 18 * S, publishBox.y + 28 * S);
+        }
+        ofSetColor(120, 126, 124);
+        std::string sub = sRegistered ? ("publishes your recordings to " + sRegServer + " under this collection name")
+                                      : "register on a server first (REGISTER tab), then PUBLISH your recordings";
+        fUI.drawString(sub, px + 40 * S, publishBox.getMaxY() + 26 * S);
     }
     bool saved = (t - saveFlash) < 1.6f;
     saveBox = ofRectangle(px + pw - 240 * S, py + ph - 72 * S, 200 * S, 46 * S);
@@ -2651,7 +2700,7 @@ void ofApp::verifyRegistration() {
     std::string outFile = gsScratch("hg_whoami.json");
     ofFile::removeFile(outFile);
     std::string cmd = "curl -s -m 8 " + gsShQuote(server + "/whoami?channelId=" + sChannelId) +
-                      " -o " + gsShQuote(outFile) + " 2>/dev/null &";
+                      " -o " + gsShQuote(outFile) + " 2>" + gsNullDev() + " &";
     system(cmd.c_str());
     regVerifyPending = true; regVerifyT = t;
 }
@@ -2673,7 +2722,7 @@ void ofApp::registerArtist() {
     // -w prints the HTTP status as a trailing line after the response body, so we can read both from popen.
     std::string cmd = "curl -s -m 15 -w " + gsShQuote("\n%{http_code}") +
         " -X POST -H " + gsShQuote("Content-Type: application/json") +
-        " --data-binary @" + gsShQuote(bodyFile) + " " + gsShQuote(server + "/register") + " 2>/dev/null";
+        " --data-binary @" + gsShQuote(bodyFile) + " " + gsShQuote(server + "/register") + " 2>" + gsNullDev();
     std::string out;
     if (FILE* p = GS_POPEN(cmd.c_str(), "r")) {
         char buf[4096]; size_t n;
@@ -2714,6 +2763,111 @@ void ofApp::registerArtist() {
         sRegistered = false;
         ofLogError() << "REGISTER failed: " << err;
     }
+}
+
+// Thread-safe setter for publishStatus: publishCollection() runs its upload on a detached thread, so both
+// that thread and the main thread (drawSettings) touch this string — guard every write under publishMtx.
+void ofApp::setPublishStatus(const std::string& s) {
+    std::lock_guard<std::mutex> lk(publishMtx);
+    publishStatus = s;
+    publishFlash  = t;
+}
+
+// Publish the local recordings as a named collection on the registered server — parity with the `helio`
+// CLI, using the app's EXISTING shell-out architecture (curl + ffmpeg via system()/popen(); NO addon, NO
+// in-process HTTP). First POSTs {server}/collections to create/reuse the collection (parses the returned
+// id), then for each *.mp4 in recDir() extracts audio to a temp mp3 (ffmpeg) and POSTs it to
+// {server}/collections/{id}/tracks with the Bearer token + X-Track-Name/X-Track-Ext headers. The whole
+// upload runs on a DETACHED thread so a slow/large transfer never blocks the UI; progress is surfaced via
+// setPublishStatus() (guarded) and shown in the PUBLISH tab.
+void ofApp::publishCollection() {
+    if (!sRegistered)             { setPublishStatus("Register on a server first (S \xE2\x86\x92 REGISTER)."); return; }
+    if (sCollectionName.empty())  { setPublishStatus("Enter a Collection Name."); return; }
+    if (sSnapshotToken.empty())   { setPublishStatus("No auth token \xE2\x80\x94 re-register on the server."); return; }
+    std::string server = sRegServer;
+    while (!server.empty() && server.back() == '/') server.pop_back();
+    if (server.empty())           { setPublishStatus("Enter the registration server URL."); return; }
+
+    // Snapshot the values the thread needs now (fields could change while the upload runs).
+    std::string token = sSnapshotToken, artist = sArtist, name = sCollectionName, dir = recDir();
+    setPublishStatus("Publishing\xE2\x80\xA6");
+    // Persist the collection name up front (main thread), now that a publish was started.
+    writeSession();
+
+    std::thread([this, server, token, artist, name, dir]() {
+        // 1) Create/reuse the collection. Mirror registerArtist(): write the JSON body to a scratch file,
+        //    POST it, read stdout via popen, split the trailing -w '%{http_code}' line, parse {id}.
+        // NOTE (Windows caveat — see report): gsShQuote() single-quotes args, which POSIX sh honors but
+        // cmd.exe does NOT. This whole shell-out layer (snapshot/register/ffmpeg AND these collection calls)
+        // needs a cross-platform quoting fix (double-quote + '^'-escape) before it will run on Windows.
+        ofJson body; body["artist"] = artist; body["name"] = name;
+        std::string bodyFile = gsScratch("hg_collection_body.json");
+        { std::ofstream o(bodyFile); o << body.dump(); }
+        std::string cmd = "curl -s -m 20 -w " + gsShQuote("\n%{http_code}") +
+            " -X POST -H " + gsShQuote("Authorization: Bearer " + token) +
+            " -H " + gsShQuote("Content-Type: application/json") +
+            " --data-binary @" + gsShQuote(bodyFile) + " " + gsShQuote(server + "/collections") + " 2>" + gsNullDev();
+        std::string out;
+        if (FILE* p = GS_POPEN(cmd.c_str(), "r")) {
+            char buf[4096]; size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), p)) > 0) out.append(buf, n);
+            GS_PCLOSE(p);
+        }
+        ofFile::removeFile(bodyFile);
+
+        std::string httpCode, respBody = out;
+        size_t nl = out.find_last_of('\n');
+        if (nl != std::string::npos) { httpCode = out.substr(nl + 1); respBody = out.substr(0, nl); }
+        while (!httpCode.empty() && !isdigit((unsigned char)httpCode.back())) httpCode.pop_back();
+
+        std::string id;
+        try { ofJson r = ofJson::parse(respBody); if (r.value("ok", false)) id = r.value("id", std::string("")); } catch (...) {}
+        if (id.empty()) {
+            setPublishStatus("Could not create collection (HTTP " + (httpCode.empty() ? std::string("?") : httpCode) + ").");
+            ofLogError() << "PUBLISH: create collection failed, http=" << httpCode << " body=" << respBody;
+            return;
+        }
+
+        // 2) Enumerate the recordings folder for *.mp4.
+        ofDirectory d(dir); d.allowExt("mp4"); d.listDir();
+        int total = (int)d.size();
+        if (total == 0) { setPublishStatus("No recordings (*.mp4) found in " + dir); return; }
+
+        // 3) For each recording: extract audio-only mp3 (ffmpeg), then POST it as a track. Skip failures
+        //    and continue; report the count at the end.
+        std::string log = gsScratch("gs_publish.log");
+        std::string respTmp = gsScratch("hg_pub_resp.bin");   // discard the upload response body (portable — not /dev/null)
+        int done = 0;
+        for (int i = 0; i < total; i++) {
+            std::string mp4  = d.getPath(i);
+            std::string stem = ofFilePath::getBaseName(mp4);   // track name = the mp4's filename stem
+            setPublishStatus("Uploading " + ofToString(i + 1) + "/" + ofToString(total) + "\xE2\x80\xA6");
+            std::string mp3 = gsScratch("hg_pub_" + ofToString(i) + ".mp3");
+            ofFile::removeFile(mp3);
+            std::string ff = gsFFmpeg() + " -y -i " + gsShQuote(mp4) + " -vn -c:a libmp3lame -b:a 320k " +
+                             gsShQuote(mp3) + " 2>>" + gsShQuote(log);
+            system(ff.c_str());
+            if (!ofFile::doesFileExist(mp3)) { ofLogError() << "PUBLISH: audio extract failed for " << mp4; continue; }
+            // Generous timeout: tracks are large. Cap the CONNECT time only (no total -m cap) so a big but
+            // healthy upload isn't killed mid-transfer. -w prints just the HTTP status for the result check.
+            std::string up = "curl -s --connect-timeout 20 -o " + gsShQuote(respTmp) + " -w " + gsShQuote("%{http_code}") +
+                " -X POST -H " + gsShQuote("Authorization: Bearer " + token) +
+                " -H " + gsShQuote("X-Track-Name: " + gsBase64(stem)) +
+                " -H " + gsShQuote("X-Track-Ext: mp3") +
+                " -H " + gsShQuote("Content-Type: application/octet-stream") +
+                " --data-binary @" + gsShQuote(mp3) + " " + gsShQuote(server + "/collections/" + id + "/tracks") +
+                " 2>>" + gsShQuote(log);
+            std::string code;
+            if (FILE* p = GS_POPEN(up.c_str(), "r")) { char b[64]; size_t n; while ((n = fread(b, 1, sizeof(b), p)) > 0) code.append(b, n); GS_PCLOSE(p); }
+            ofFile::removeFile(mp3);
+            if (!code.empty() && code[0] == '2') { done++; ofLogNotice() << "PUBLISH: uploaded " << stem; }
+            else ofLogError() << "PUBLISH: upload failed for " << stem << " (HTTP " << code << ")";
+        }
+        ofFile::removeFile(respTmp);
+        setPublishStatus("Published " + ofToString(done) + "/" + ofToString(total) +
+                         " track" + (total == 1 ? "" : "s") + " to \"" + name + "\".");
+        ofLogNotice() << "PUBLISH: done " << done << "/" << total << " -> collection " << id;
+    }).detach();
 }
 
 // Grabs the last fully-rendered frame (fboFinal, one app-frame stale at most — irrelevant at a 1.5s
@@ -2883,9 +3037,10 @@ void ofApp::mousePressed(int x, int y, int button) {
     ofRectangle r = displayRect();
     float fx = (x - r.x) * RW / r.width, fy = (y - r.y) * RH / r.height;   // window -> FBO coords
     if (settingsOpen) {
-        for (int i = 0; i < 4; i++) if (settingsTabBox[i].inside(fx, fy)) { if (settingsTab != i) { settingsTab = i; editingField = -1; } return; }
+        for (int i = 0; i < 5; i++) if (settingsTabBox[i].inside(fx, fy)) { if (settingsTab != i) { settingsTab = i; editingField = -1; } return; }
         if (settingsTab == 1 && refreshDevicesBox.inside(fx, fy)) { refreshAudioDevices(); return; }
         if (settingsTab == 2 && registerBox.inside(fx, fy)) { if (editingField >= 0) { commitField(fields[editingField]); editingField = -1; } registerArtist(); return; }
+        if (settingsTab == 4 && publishBox.inside(fx, fy)) { if (editingField >= 0) { commitField(fields[editingField]); editingField = -1; } publishCollection(); return; }
         for (size_t i = 0; i < fields.size(); i++) {
             if (fields[i].tab != settingsTab) continue;                // hidden tab — its .box is stale from when it was last drawn
             if (fields[i].header) continue;                            // section dividers aren't clickable

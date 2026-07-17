@@ -66,6 +66,16 @@ public:
     void   verifyRegistration();                              // on startup: non-blocking GET server/whoami to confirm we're still registered server-side
     bool   regVerifyPending = false;                          // a /whoami check is in flight (result polled in update())
     float  regVerifyT = 0;                                    // t when the check was fired (for a give-up timeout)
+    // ---- collections (PUBLISH tab): publish the local recordings as a named collection on the registered
+    //      server — parity with the `helio` CLI. Reuses the app's shell-out curl/ffmpeg architecture (no HTTP
+    //      library, no addon): POST /collections to create/reuse, then upload each recording's extracted mp3.
+    std::string sCollectionName = "";                         // persisted collection name (session.json "collection" key)
+    std::string publishStatus = "";                           // last publish result / progress line (shown in the PUBLISH tab)
+    float  publishFlash = -10;                                // timestamp of the last publish status update (drives the status flash)
+    std::mutex publishMtx;                                    // guards publishStatus — updated from a detached upload thread, read while drawing
+    ofRectangle publishBox;                                   // the PUBLISH button in the settings dialog
+    void   publishCollection();                               // create/reuse a collection, then upload every recording's audio to it
+    void   setPublishStatus(const std::string& s);            // thread-safe publishStatus setter (locks publishMtx)
     // ---- channel appearance (CHANNEL tab): the artist owns how their channel looks on the listener
     //      client — UI font + accent colour (channel display name = sChannel). These ride in the shared
     //      snapshot metadata (X-Transmission), so SAVE + the next snapshot re-themes the live channel;
@@ -318,8 +328,8 @@ public:
     std::map<float*, float> snapF;
     void snapshotFields();   // capture current field values as the baseline
     void revertFields();     // restore the baseline (ESC = discard unsaved edits)
-    int   settingsTab = 0;         // which settings-dialog tab is showing: 0 SESSION · 1 ROUTING · 2 REGISTER · 3 CHANNEL
-    ofRectangle settingsTabBox[4]; // clickable tab chips, sized/positioned in drawSettings()
+    int   settingsTab = 0;         // which settings-dialog tab is showing: 0 SESSION · 1 ROUTING · 2 REGISTER · 3 CHANNEL · 4 PUBLISH
+    ofRectangle settingsTabBox[5]; // clickable tab chips, sized/positioned in drawSettings()
     float saveFlash = -10;        // timestamp of last successful save (drives the "SAVED ✓" flash)
     ofRectangle saveBox;
     void  buildFields();
