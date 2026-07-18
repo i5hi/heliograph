@@ -142,6 +142,11 @@ static const char* kFontLabels[kNumFonts] = { "IBM PLEX MONO", "JETBRAINS MONO",
 static const char* kFontFiles[kNumFonts]  = { "fonts/IBMPlexMono-Regular.ttf", "fonts/JetBrainsMono.ttf",
                                               "fonts/SpaceMono-Regular.ttf", "fonts/ShareTechMono-Regular.ttf",
                                               "fonts/VT323-Regular.ttf" };
+// Generative track-art styles for a published collection (PUBLISH tab) — the client renders whichever is
+// set (sent as `artStyle` on POST /collections), falling back to the first. Keep in sync with the server's
+// ART_STYLES and the web client's generators.
+static const int   kNumArtStyles = 6;
+static const char* kArtStyles[kNumArtStyles] = { "sigil-a", "sigil-b", "sigil-c", "sonar", "matrix", "spectrogram" };
 // bech32/bech32m checksum (BIP173/350) — validates a bc1 Bitcoin address (witness v0 bech32 OR v1
 // taproot bech32m). Liquid lq1 addresses use blech32 (a different, longer checksum) — those are
 // validated structurally in gsValidAddr (charset + length), not by checksum.
@@ -373,6 +378,8 @@ void ofApp::loadSession() {
                 if (sRegistered) regStatus = "Registered as " + sArtist;
             }
             sCollectionName = j.value("collection", sCollectionName);   // PUBLISH tab: persisted collection name
+            { std::string ak = j.value("collectionArt", std::string(kArtStyles[0]));   // PUBLISH tab: persisted track-art style (by key)
+              for (int i = 0; i < kNumArtStyles; i++) if (ak == kArtStyles[i]) { sCollectionArtIdx = i; break; } }
         } catch (...) { ofLogError() << "session.json parse failed"; }
     }
     // date is always the system date — sessions capture live, so it can't be edited or faked
@@ -2007,6 +2014,8 @@ void ofApp::buildFields() {
     // then uploads each recording's extracted audio. Needs an account (see REGISTER).
     curTab = 4;
     addS("Collection Name", &sCollectionName);   // the collection your recordings are published under
+    { std::vector<std::string> al(kArtStyles, kArtStyles + kNumArtStyles);
+      addC("Track Art", &sCollectionArtIdx, al, nullptr); }   // generative art style for this collection — click to cycle
 
     // Once registered, the artist name IS the channel identity (it hashes to the channel id) — lock every
     // artist-name field so it can't be changed. Pure local-recording users (not registered) stay editable.
@@ -2055,6 +2064,7 @@ void ofApp::writeSession() {
     j["registration"]["channelId"]  = sChannelId;
     j["registration"]["registered"] = sRegistered;
     j["collection"] = sCollectionName;   // PUBLISH tab: persisted collection name
+    j["collectionArt"] = kArtStyles[(int)ofClamp(sCollectionArtIdx, 0, kNumArtStyles - 1)];   // PUBLISH tab: track-art style
     j["coordinates"]["waypoint"] = sWaypoint;
     j["coordinates"]["heading"]  = sHeading;
     j["coordinates"]["distance"] = sDist;
@@ -2790,6 +2800,7 @@ void ofApp::publishCollection() {
 
     // Snapshot the values the thread needs now (fields could change while the upload runs).
     std::string token = sSnapshotToken, artist = sArtist, name = sCollectionName, dir = recDir();
+    std::string artStyle = kArtStyles[(int)ofClamp(sCollectionArtIdx, 0, kNumArtStyles - 1)];
     setPublishStatus("Publishing\xE2\x80\xA6");
     // Persist the collection name up front (main thread), now that a publish was started.
     writeSession();
@@ -2800,7 +2811,7 @@ void ofApp::publishCollection() {
         // NOTE (Windows caveat — see report): gsShQuote() single-quotes args, which POSIX sh honors but
         // cmd.exe does NOT. This whole shell-out layer (snapshot/register/ffmpeg AND these collection calls)
         // needs a cross-platform quoting fix (double-quote + '^'-escape) before it will run on Windows.
-        ofJson body; body["artist"] = artist; body["name"] = name;
+        ofJson body; body["artist"] = artist; body["name"] = name; body["artStyle"] = artStyle;
         std::string bodyFile = gsScratch("hg_collection_body.json");
         { std::ofstream o(bodyFile); o << body.dump(); }
         std::string cmd = "curl -s -m 20 -w " + gsShQuote("\n%{http_code}") +

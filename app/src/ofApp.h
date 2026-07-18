@@ -70,6 +70,7 @@ public:
     //      server — parity with the `helio` CLI. Reuses the app's shell-out curl/ffmpeg architecture (no HTTP
     //      library, no addon): POST /collections to create/reuse, then upload each recording's extracted mp3.
     std::string sCollectionName = "";                         // persisted collection name (session.json "collection" key)
+    int    sCollectionArtIdx = 0;                             // generative track-art style index into kArtStyles[] (sent as `artStyle` on publish; click the field to cycle)
     std::string publishStatus = "";                           // last publish result / progress line (shown in the PUBLISH tab)
     float  publishFlash = -10;                                // timestamp of the last publish status update (drives the status flash)
     std::mutex publishMtx;                                    // guards publishStatus — updated from a detached upload thread, read while drawing
