@@ -2805,7 +2805,7 @@ void ofApp::publishCollection() {
     // Persist the collection name up front (main thread), now that a publish was started.
     writeSession();
 
-    std::thread([this, server, token, artist, name, dir]() {
+    std::thread([this, server, token, artist, name, dir, artStyle]() {
         // 1) Create/reuse the collection. Mirror registerArtist(): write the JSON body to a scratch file,
         //    POST it, read stdout via popen, split the trailing -w '%{http_code}' line, parse {id}.
         // NOTE (Windows caveat — see report): gsShQuote() single-quotes args, which POSIX sh honors but
